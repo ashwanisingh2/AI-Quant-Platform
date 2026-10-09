@@ -6,6 +6,8 @@ Usage:
   python -m apps.data_gateway.main fetch --provider kite --symbol RELIANCE --days 30
   python -m apps.data_gateway.main list
   python -m apps.data_gateway.main show --instrument NSE:RELIANCE --spark
+  python -m apps.data_gateway.main chain --symbol NIFTY          # F&O option chain
+  python -m apps.data_gateway.main chain --symbol BANKNIFTY --spot 52000
 """
 from __future__ import annotations
 
@@ -62,6 +64,27 @@ def cmd_list(args) -> None:
             print(f"{inst_key:<20} {s['candles']:>8}  {s['from']:<12} {s['to']:<12} {s['last_close']:>12.2f}")
 
 
+def cmd_chain(args) -> None:
+    """F&O option chain dikhao — strikes + CE/PE premiums (mock/synthetic)."""
+    from apps.data_gateway.providers.mock_provider import MockProvider, default_fno_spot
+    from libs.shared.fno import LOT_SIZES, atm_strike, parse_fno_symbol
+    und = args.symbol.strip().upper()
+    spot = args.spot or default_fno_spot(und)
+    chain = MockProvider().get_option_chain(und, expiry=args.expiry, spot=spot)
+    if not chain:
+        raise SystemExit(f"❌ Chain nahi mili: {und}")
+    lot = LOT_SIZES.get(und, 1)
+    fno = parse_fno_symbol(chain[0]["ce"]["symbol"])
+    atm = atm_strike([r["strike"] for r in chain], spot)
+    print(f"📊 Option Chain — {und} · spot ₹{spot:,.2f} · lot {lot} · expiry {fno.expiry if fno else '?'}")
+    print(f"{'STRIKE':>10} {'':>6} {'CE PREMIUM':>12}  {'CE SYMBOL':<26} {'PE PREMIUM':>12}  {'PE SYMBOL':<26}")
+    for r in chain:
+        mon = "ATM" if r["strike"] == atm else ("ITM" if r["strike"] < spot else "OTM")
+        print(f"{r['strike']:>10.0f} {mon:>6} {r['ce']['premium']:>12.2f}  {r['ce']['symbol']:<26} "
+              f"{r['pe']['premium']:>12.2f}  {r['pe']['symbol']:<26}")
+    print(f"\n💡 Kisi contract ka data lene ke liye: fetch --provider mock --symbol {chain[0]['ce']['symbol']} --days 90")
+
+
 def cmd_show(args) -> None:
     store = ParquetStore()
     start = date.fromisoformat(args.start) if args.start else None
@@ -100,6 +123,12 @@ def main() -> None:
     s.add_argument("--tail", type=int, default=10)
     s.add_argument("--spark", action="store_true")
     s.set_defaults(func=cmd_show)
+
+    ch = sub.add_parser("chain", help="Show F&O option chain (strikes + CE/PE premiums, mock)")
+    ch.add_argument("--symbol", default="NIFTY", help="underlying e.g. NIFTY, BANKNIFTY")
+    ch.add_argument("--spot", type=float, default=None, help="spot price (default: mock default)")
+    ch.add_argument("--expiry", default=None, help='expiry e.g. "23OCT25" (default: current month)')
+    ch.set_defaults(func=cmd_chain)
 
     args = ap.parse_args()
     args.func(args)

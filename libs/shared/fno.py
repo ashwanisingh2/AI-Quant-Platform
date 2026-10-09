@@ -83,13 +83,12 @@ def parse_fno_symbol(symbol: str) -> FnoInstrument | None:
 
 
 def _make_date(dd: int, mon: str, yy: int) -> date:
+    """Symbol ka day = exact expiry date (weekly bhi ho sakta hai — Thursday adjust nahi)."""
+    import calendar
     month = _MONTHS.index(mon) + 1
     year = 2000 + yy
-    # expiry Thursday ko adjust karo (given date se pichhle Thursday)
-    d = date(year, month, min(dd, 28))
-    while d.weekday() != 3:  # Thursday
-        d -= timedelta(days=1)
-    return d
+    last = calendar.monthrange(year, month)[1]
+    return date(year, month, min(dd, last))
 
 
 def format_fno_symbol(fno: FnoInstrument) -> str:

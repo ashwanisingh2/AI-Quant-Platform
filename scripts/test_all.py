@@ -1141,7 +1141,52 @@ def t_p8_cli_fetch_fno():
     assert "atm_call_buy" in r2.stdout
 
 
+def t_p8_fno_roundtrip():
+    from libs.shared.fno import format_fno_symbol, monthly_expiry, parse_fno_symbol
+    # exact expiry roundtrip — 29OCT26 IS a Thursday
+    f = parse_fno_symbol("NIFTY-29OCT26-FUT")
+    assert str(f.expiry) == "2026-10-29", f.expiry
+    assert format_fno_symbol(f) == "NIFTY-29OCT26-FUT"
+    # non-Thursday weekly expiry exact (SENSEX Tuesday weekly)
+    w = parse_fno_symbol("SENSEX-27OCT26-78000-CE")
+    assert str(w.expiry) == "2026-10-27" and w.expiry.weekday() == 1
+    assert format_fno_symbol(w) == "SENSEX-27OCT26-78000-CE"
+    # option roundtrip
+    o = parse_fno_symbol("NIFTY-29OCT26-24000-CE")
+    assert format_fno_symbol(o) == "NIFTY-29OCT26-24000-CE"
+    # monthly expiry = last Thursday
+    assert str(monthly_expiry(2026, 10)) == "2026-10-29"
+    assert monthly_expiry(2026, 2).weekday() == 3
+
+
+def t_p8_cli_chain():
+    r = subprocess.run([sys.executable, "-m", "apps.data_gateway.main", "chain",
+                        "--symbol", "NIFTY"],
+                       capture_output=True, text=True, cwd=ROOT, timeout=60)
+    assert r.returncode == 0, f"chain CLI failed: {r.stderr[-300:]}"
+    assert "Option Chain" in r.stdout and "NIFTY" in r.stdout
+    assert "ATM" in r.stdout and "CE PREMIUM" in r.stdout and "PE PREMIUM" in r.stdout
+    assert "24000-CE" in r.stdout and "24000-PE" in r.stdout  # ATM strike symbols
+    # custom spot
+    r2 = subprocess.run([sys.executable, "-m", "apps.data_gateway.main", "chain",
+                         "--symbol", "BANKNIFTY", "--spot", "51000"],
+                        capture_output=True, text=True, cwd=ROOT, timeout=60)
+    assert r2.returncode == 0 and "51,000" in r2.stdout, r2.stdout[:200]
+
+
+def t_p8_dashboard_fno_page():
+    src = (ROOT / "apps" / "dashboard" / "src" / "pages" / "Fno.jsx").read_text()
+    assert "apiGet(`/fno/chain" in src, "Fno page /fno/chain fetch nahi karta"
+    assert "apiGet('/fno/underlyings')" in src, "Fno page underlyings nahi fetch karta"
+    assert "apiPost('/data/fetch'" in src, "Fno page contract fetch nahi karta"
+    app = (ROOT / "apps" / "dashboard" / "src" / "App.jsx").read_text()
+    assert "import FnoPage from './pages/Fno'" in app, "Fno page import nahi hai"
+    assert "id: 'fno'" in app, "FnO tab nahi hai"
+    assert "fno: FnoPage" in app, "FnO page map missing"
+
+
 check("fno: symbol parse/format/lots/expiry", t_p8_fno_symbol_parse)
+check("fno: exact expiry roundtrip (weekly + monthly)", t_p8_fno_roundtrip)
 check("risk: F&O checks (lot, notional, naked sell)", t_p8_risk_fno_checks)
 check("mock: F&O data + option chain", t_p8_mock_fno_data)
 check("backtest: F&O future + atm_call_buy", t_p8_backtest_fno)
@@ -1150,6 +1195,8 @@ check("instruments: FuturesContract/OptionContract", t_p8_instruments_fno)
 check("evaluator: atm_call_buy BUY→exit", t_p8_evaluator_atm_call_buy)
 check("live: F&O lot size enforcement", t_p8_live_fno_lot_enforcement)
 check("CLI: fetch F&O + strategies list", t_p8_cli_fetch_fno)
+check("CLI: option chain (strikes + premiums)", t_p8_cli_chain)
+check("dashboard: FnO chain page wired", t_p8_dashboard_fno_page)
 
 # ============================================================
 print("\n🌐 PHASE 3 — API + Dashboard (live servers)")
@@ -1187,7 +1234,8 @@ if not api_up():
                  "API live dhan dry-run + invalid broker gate",
                  "API brokers list (4 brokers)",
                  "API live fyers dry-run + broker gate",
-                 "API F&O flow (fetch + paper + kill)"]:
+                 "API F&O flow (fetch + paper + kill)",
+                 "API F&O option chain (strikes + premiums)"]:
         skip(name, "API server nahi chal raha (python -m apps.api.main)")
 else:
     def t_api_health():
@@ -1445,6 +1493,38 @@ else:
         assert http_get(API + "/portfolio")["killed"] is True
 
     check("API F&O flow (fetch + paper + kill)", t_api_fno_flow)
+
+    def t_api_fno_chain():
+        # underlyings with lot sizes
+        u = http_get(API + "/fno/underlyings")["underlyings"]
+        by_name = {x["symbol"]: x["lot_size"] for x in u}
+        assert by_name.get("NIFTY") == 75 and by_name.get("BANKNIFTY") == 35
+        # chain: 21 strikes, CE/PE symbols + premiums, moneyness flags
+        r = http_get(API + "/fno/chain?underlying=NIFTY&spot=24000")
+        assert r["underlying"] == "NIFTY" and r["spot"] == 24000.0
+        assert r["lot_size"] == 75 and r["expiry"]
+        assert len(r["chain"]) == 21
+        atm = next(x for x in r["chain"] if x["atm"])
+        assert atm["strike"] == 24000.0
+        assert "24000-CE" in atm["ce"]["symbol"] and atm["ce"]["premium"] > 0
+        assert "24000-PE" in atm["pe"]["symbol"] and atm["pe"]["premium"] > 0
+        assert atm["ce"]["instrument"].startswith("NSE:") and atm["pe"]["instrument"].startswith("NSE:")
+        assert atm["ce_itm"] is False and atm["pe_itm"] is False  # ATM
+        itm = next(x for x in r["chain"] if x["ce_itm"])
+        assert itm["ce"]["premium"] > atm["ce"]["premium"], "ITM CE premium zyada hona chahiye"
+        otm = next(x for x in r["chain"] if x["strike"] >= 24500)  # farthest strike
+        assert otm["pe_itm"] is True and otm["ce_itm"] is False
+        # custom spot respected
+        r2 = http_get(API + "/fno/chain?underlying=BANKNIFTY&spot=51000")
+        assert r2["spot"] == 51000.0 and r2["underlying"] == "BANKNIFTY"
+        # empty underlying → 400
+        try:
+            http_get(API + "/fno/chain?underlying=")
+            raise AssertionError("empty underlying allowed (expected 400)")
+        except urllib.error.HTTPError as e:
+            assert e.code == 400, f"expected 400, got {e.code}"
+
+    check("API F&O option chain (strikes + premiums)", t_api_fno_chain)
 
 # ============================================================
 # SUMMARY

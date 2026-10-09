@@ -165,6 +165,50 @@ def instruments():
     return {"instruments": out}
 
 
+@app.get("/fno/underlyings")
+def fno_underlyings():
+    """F&O underlyings jo support hote hain (lot size ke saath)."""
+    from libs.shared.fno import LOT_SIZES
+    return {"underlyings": [{"symbol": s, "lot_size": lot}
+                            for s, lot in sorted(LOT_SIZES.items())]}
+
+
+@app.get("/fno/chain")
+def fno_chain(underlying: str, spot: float | None = None, expiry: str | None = None):
+    """Option chain — strikes + CE/PE premiums (mock/synthetic data).
+
+    Real broker chain baad mein — same interface.
+    """
+    from apps.data_gateway.providers.mock_provider import MockProvider, default_fno_spot
+    from libs.shared.fno import LOT_SIZES, atm_strike, parse_fno_symbol
+    und = underlying.strip().upper()
+    if not und:
+        raise HTTPException(400, "underlying required hai (e.g. NIFTY)")
+    chain = MockProvider().get_option_chain(und, expiry=expiry, spot=spot)
+    if not chain:
+        raise HTTPException(404, f"Chain nahi mili: {und}")
+    spot_used = spot if spot else default_fno_spot(und)
+    atm = atm_strike([r["strike"] for r in chain], spot_used)
+    fno = parse_fno_symbol(chain[0]["ce"]["symbol"])
+    rows = []
+    for r in chain:
+        rows.append({
+            "strike": r["strike"],
+            "atm": r["strike"] == atm,
+            "ce_itm": r["strike"] < spot_used,
+            "pe_itm": r["strike"] > spot_used,
+            "ce": {**r["ce"], "instrument": f"NSE:{r['ce']['symbol']}"},
+            "pe": {**r["pe"], "instrument": f"NSE:{r['pe']['symbol']}"},
+        })
+    return {
+        "underlying": und,
+        "spot": spot_used,
+        "expiry": str(fno.expiry) if fno else None,
+        "lot_size": LOT_SIZES.get(und, 1),
+        "chain": rows,
+    }
+
+
 @app.post("/data/fetch")
 async def data_fetch(req: FetchRequest):
     def _do():

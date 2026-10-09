@@ -47,7 +47,7 @@ cd apps/dashboard && npm install && npm run dev
 # Browser → http://localhost:5173
 ```
 
-**Dashboard pages:** 📊 Overview (P&L, positions, equity chart, **KILL SWITCH**, paper trading controls) · 🟢 **Live** (multi-broker live/dry-run trading, positions, orders, kill switch) · 🤖 Agent Console (AI signals + reasoning trace + approve/reject) · 🧠 Backtests (run + saved results) · 💾 Data (fetch + candlestick charts)
+**Dashboard pages:** 📊 Overview (P&L, positions, equity chart, **KILL SWITCH**, paper trading controls) · 🟢 **Live** (multi-broker live/dry-run trading, positions, orders, kill switch) · 📈 **FnO** (option chain — strikes, CE/PE premiums, ITM/ATM/OTM, contract data fetch) · 🤖 Agent Console (AI signals + reasoning trace + approve/reject) · 🧠 Backtests (run + saved results) · 💾 Data (fetch + candlestick charts)
 
 ## 🧩 CLIs
 
@@ -152,7 +152,7 @@ ai-quant-platform/
 │   │   └── live.py                  # ✅ Phase 4 — LiveTrader + price sources (replay/Kite/Dhan)
 │   ├── agent/          # ✅ Phase 2 — AI pipeline, LLM clients, registry, FastAPI + CLI
 │   ├── api/            # ✅ Phase 3+4+6 — orchestration API (REST + WebSocket, live + brokers)
-│   └── dashboard/      # ✅ Phase 3+6 — React + Vite (5 pages, live charts, Live trading page)
+│   └── dashboard/      # ✅ Phase 3+6+8 — React + Vite (6 pages, live charts, Live + FnO chain pages)
 ├── libs/
 │   ├── shared/         # models (Candle, Signal, AgentRun...) + charts
 │   ├── storage/        # Parquet + DuckDB store
@@ -180,7 +180,7 @@ ai-quant-platform/
 ## 🧪 Testing
 
 ```bash
-# Full test suite — Phase 0, 1, 2, 3, 4, 5, 6, 7, 8 (74 tests)
+# Full test suite — Phase 0, 1, 2, 3, 4, 5, 6, 7, 8 (78 tests)
 # API/dashboard tests ke liye servers chalne chahiye (yeh auto-SKIP hote hain agar band hon)
 python -m apps.api.main &          # port 8000
 cd apps/dashboard && npm run dev & # port 5173
@@ -261,6 +261,7 @@ NSE:NIFTY-23OCT25-24000-PE     # put option
 - **Risk engine +3 F&O checks** — `fno_lot_size` (qty lot ka multiple) · `fno_notional_cap` (default 100% of capital) · `no_naked_option_sell` (**MVP mein naked option selling nahi** — sirf buy/long-exit). Equity position cap F&O pe nahi lagta (apna notional cap hai).
 - **All 4 brokers** — F&O symbol mapping per broker (Kite/Upstox: `NFO:NIFTY25OCTFUT` · Dhan: `NSE_FNO` segment + security_id · Fyers: `NSE:NIFTY25OCTFUT`)
 - **Mock F&O data** — synthetic futures/options candles + `get_option_chain()` (21 strikes, CE/PE premiums)
+- **Option Chain har jagah dikhta hai** 🆕 — dashboard pe naya **📈 FnO tab** (strike table: CE/PE premiums, ITM/ATM/OTM, per-contract Fetch button) · API `GET /fno/chain?underlying=NIFTY&spot=24000` + `/fno/underlyings` · CLI `aiq-data chain --symbol NIFTY`
 - **`atm_call_buy` strategy** — options BUY only (EMA cross on premium, long exit). Naked selling nahi karti.
 - **Nautilus instruments** — `FuturesContract`/`OptionContract` with real lot sizes (backtest = signal validation; CASH account full notional debit karta hai, toh capital ≥ 1 lot notional rakho — NIFTY ≈ ₹18L at 24000)
 
@@ -269,8 +270,11 @@ NSE:NIFTY-23OCT25-24000-PE     # put option
 python -m apps.data_gateway.main fetch --provider mock --symbol NIFTY-23OCT25-FUT --days 90
 python -m apps.engine.main backtest --instrument NSE:NIFTY-23OCT25-FUT --strategy ema_cross --capital 5000000
 
-# Option chain dekho
-python -c "from apps.data_gateway.providers.mock_provider import MockProvider; print(MockProvider().get_option_chain('NIFTY', spot=24000.0))"
+# Option chain dekho — CLI se
+python -m apps.data_gateway.main chain --symbol NIFTY
+
+# Option chain dekho — API se (dashboard isse use karta hai)
+curl "localhost:8000/fno/chain?underlying=NIFTY&spot=24000"
 
 # F&O paper/live dry-run (lot size enforce hoga)
 python -m apps.engine.main live --instrument NSE:NIFTY-23OCT25-FUT --strategy ema_cross --mode dry_run
@@ -286,7 +290,7 @@ python -m apps.engine.main live --instrument NSE:NIFTY-23OCT25-FUT --strategy em
 - [x] **Phase 5** — OSS release (packaging, Docker, CI, community, docs)
 - [x] **Phase 6** — Multi-broker abstraction + Dhan + Live dashboard
 - [x] **Phase 7** — 4 brokers: Kite + Dhan + Upstox + Fyers
-- [x] **Phase 8** — F&O support (symbols, lots, risk checks, options-buyer strategy) ← *abhi yahin hain*
+- [x] **Phase 8** — F&O support (symbols, lots, risk checks, options-buyer strategy, option chain UI) ← *abhi yahin hain*
 - [ ] **Phase 9** — Mobile app, hosted SaaS, margin-based F&O accounting
 
 ## 📚 Design Docs

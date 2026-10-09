@@ -22,6 +22,11 @@ _FNO_STRIKE_STEP = {"NIFTY": 50, "BANKNIFTY": 100, "FINNIFTY": 50,
                     "MIDCPNIFTY": 25, "SENSEX": 100, "BANKEX": 100}
 
 
+def default_fno_spot(underlying: str) -> float:
+    """Mock ka default spot for an underlying (API/UI display ke liye)."""
+    return _FNO_SPOT.get(underlying.strip().upper(), 2000.0)
+
+
 class MockProvider(DataProvider):
     name = "mock"
 
