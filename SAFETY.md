@@ -21,17 +21,31 @@ export LIVE_TRADING_ENABLED=true          # gate 1: samajh-bujh ke
                                            # gate 2: API/CLI se exact phrase:
                                            #   "I UNDERSTAND THIS TRADES REAL MONEY"
 export LIVE_MAX_CAPITAL=50000              # gate 3: apni max limit (₹)
-export KITE_API_KEY="your_key"             # gate 4: Zerodha Kite creds
+
+# gate 4: broker creds — apne broker ke hisaab se:
+export KITE_API_KEY="your_key"             # Zerodha Kite
 export KITE_ACCESS_TOKEN="your_token"
+# YA
+export DHAN_CLIENT_ID="your_client_id"     # Dhan
+export DHAN_ACCESS_TOKEN="your_token"
 ```
 
 Bina inke live start nahi hoga — engine 400 error dega. Ye jaan-bujhkar rakha gaya hai.
 
-## 3️⃣ Zerodha Kite setup
+## 3️⃣ Broker setup (Kite ya Dhan)
 
+**Zerodha Kite:**
 1. [Kite Connect](https://kite.trade/) pe account banao (developer console).
 2. `KITE_API_KEY` lo. Access token ke liye pehli baar login flow (request token → session) karna padta hai — [Kite docs](https://kite.trade/docs/connect/v3/#authentication).
-3. **Sandbox/testnet nahi hai Kite ka** — dry-run hamara apna simulated broker hai (`KiteBroker(dry_run=True>`).
+3. **Sandbox/testnet nahi hai Kite ka** — dry-run hamara apna simulated broker hai (`KiteBroker(dry_run=True)`).
+
+**Dhan:**
+1. [DhanHQ](https://dhanhq.co/) pe developer account banao.
+2. `DHAN_CLIENT_ID` + `DHAN_ACCESS_TOKEN` lo (access token daily regenerate hota hai).
+3. Yaad rakho — Dhan ki baatein alag hain: security_id (e.g. `1333` = HDFC Bank), segments `NSE_EQ`, product `CNC`/`INTRA`. Hamara adapter (`DhanBroker`) ye sab handle karta hai.
+4. `GET /brokers` se dekh sakte ho kaun-kaun se brokers hain aur creds hain ya nahi.
+
+**Koi bhi broker ho — same safety:** risk engine ke 11 checks, kill switch, aur 4 gates sab par lagte hain.
 
 ## 4️⃣ Pehla live run — chhota aur dhyaan se
 

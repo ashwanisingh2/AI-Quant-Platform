@@ -1,4 +1,4 @@
-"""Full test suite — Phase 0, 1, 2, 3, 4, 5.
+"""Full test suite — Phase 0, 1, 2, 3, 4, 5, 6.
 
 Run:  python scripts/test_all.py
 
@@ -613,6 +613,176 @@ check("community: LICENSE/CONTRIBUTING/SECURITY/templates", t_p5_community_files
 check("demo: phase4 dry-run script runs", t_p5_demo_phase4)
 
 # ============================================================
+print("\n🏭 PHASE 6 — Multi-Broker (Kite + Dhan) + Live Dashboard")
+# ============================================================
+
+def t_p6_broker_base_conformance():
+    from apps.engine.brokers import BrokerBase, available_brokers, get_broker
+    # registry mein dono brokers
+    names = {b["name"] for b in available_brokers()}
+    assert {"kite", "dhan"} <= names, names
+    # factory se dono instantiate (ABC pura implement kiya hai)
+    for name in ("kite", "dhan"):
+        b = get_broker(name, dry_run=True)
+        assert isinstance(b, BrokerBase), name
+        assert b.dry_run is True and b.is_live is False
+        assert b.mode == "dry_run"
+        # interface ke saare methods maujood
+        for m in ("connect", "resolve_token", "quote", "place_market_order",
+                  "cancel_order", "open_orders", "all_orders", "positions",
+                  "margins", "square_off_all", "set_price"):
+            assert callable(getattr(b, m)), f"{name}.{m} missing"
+    # unknown broker → ValueError
+    try:
+        get_broker("upstox")
+        raise AssertionError("unknown broker allowed")
+    except ValueError as e:
+        assert "upstox" in str(e)
+    # purana import path (shim) abhi bhi chalega
+    from apps.engine.brokers.kite_broker import KiteBroker
+    from apps.engine.kite_broker import KiteBroker as ShimKite
+    assert ShimKite is KiteBroker
+
+
+def t_p6_dhan_broker_dry_run():
+    from apps.engine.brokers import get_broker
+    b = get_broker("dhan", dry_run=True)
+    assert b.name == "dhan"
+    assert b.connect()["status"].startswith("connected")
+    # dhan security_id = string
+    token = b.resolve_token("NSE", "TESTCO")
+    assert isinstance(token, str) and token.isdigit()
+    b.set_price(500.0)
+    q = b.quote("NSE", "TESTCO")
+    assert q["last_price"] == 500.0 and q["source"] == "dry_run"
+    # BUY → instant COMPLETE at last price
+    o = b.place_market_order("NSE", "TESTCO", "BUY", 10)
+    assert o["status"] == "COMPLETE" and o["price"] == 500.0 and o["filled_qty"] == 10
+    pos = {p["symbol"]: p for p in b.positions()}
+    assert pos["TESTCO"]["qty"] == 10 and pos["TESTCO"]["avg_price"] == 500.0
+    # segment/product mapping
+    assert b._segment("NSE") == "NSE_EQ" and b._product("CNC") == "CNC" and b._product("MIS") == "INTRA"
+    # cancel: dry-run mein sab COMPLETE → NOT_FOUND
+    assert b.cancel_order(o["order_id"])["status"] == "NOT_FOUND"
+    # square off → position 0
+    closed = b.square_off_all()
+    assert len(closed) == 1 and closed[0]["side"] == "SELL"
+    assert all(p["qty"] == 0 for p in b.positions())
+    assert len(b.all_orders()) == 2 and b.open_orders() == []
+    # unsupported exchange → error
+    try:
+        b._segment("NSE_FNO")
+        raise AssertionError("F&O segment allowed (MVP mein nahi)")
+    except ValueError:
+        pass
+
+
+def t_p6_dhan_live_trader_dry_run():
+    import asyncio
+
+    from apps.engine.brokers import get_broker
+    from apps.engine.live import LiveTrader, ReplayPriceSource
+    from libs.risk.engine import RiskEngine, RiskLimits
+
+    async def run():
+        events = []
+        broker = get_broker("dhan", dry_run=True)
+        src = ReplayPriceSource("NSE:TESTCO", speed=0, limit=80)
+        t = LiveTrader("NSE:TESTCO", "ema_cross", {}, broker=broker,
+                       risk_engine=RiskEngine(RiskLimits(trading_hours_only=False)),
+                       price_source=src, on_event=lambda e: events.append(e),
+                       capital=1_000_000)
+        await t.start()
+        await asyncio.wait_for(t._task, timeout=30)
+        await asyncio.sleep(0.2)
+        s = t.state()
+        assert s["mode"] == "dry_run" and s["running"] is False
+        assert len(s["equity_curve"]) > 10
+        # 💰 cash invariant from broker ledger
+        cash = 1_000_000.0
+        n = 0
+        for o in broker.all_orders():
+            if o["status"] == "COMPLETE":
+                n += 1
+                cash += o["qty"] * o["price"] * (1 if o["side"] == "SELL" else -1)
+        assert n >= 1, "dhan: koi order nahi hua"
+        assert abs(s["cash"] - cash) < 0.01, f"dhan cash mismatch: {s['cash']} vs {cash}"
+        # har order risk se hokar gaya
+        for e in events:
+            if e["type"] == "live.order":
+                assert e["risk"]["allowed"] is True
+
+    asyncio.run(run())
+
+
+def t_p6_available_brokers_info():
+    from apps.engine.brokers import available_brokers
+    info = {b["name"]: b for b in available_brokers()}
+    assert info["kite"]["required_env"] == ["KITE_API_KEY"]
+    assert info["dhan"]["required_env"] == ["DHAN_CLIENT_ID"]
+    # sandbox mein creds nahi hain
+    assert info["kite"]["credentials_present"] is False
+    assert info["dhan"]["credentials_present"] is False
+
+
+def t_p6_cli_live_broker():
+    # dhan dry-run via CLI
+    r = subprocess.run([sys.executable, "-m", "apps.engine.main", "live",
+                        "--instrument", "NSE:TESTCO", "--strategy", "ema_cross",
+                        "--mode", "dry_run", "--broker", "dhan",
+                        "--speed", "0", "--limit", "60"],
+                       capture_output=True, text=True, cwd=ROOT, timeout=60)
+    assert r.returncode == 0, f"dhan CLI failed: {r.stderr[-400:]}"
+    assert "Live Trader (dry_run)" in r.stdout
+    # unknown broker → non-zero exit
+    r2 = subprocess.run([sys.executable, "-m", "apps.engine.main", "live",
+                         "--instrument", "NSE:TESTCO", "--broker", "upstox"],
+                        capture_output=True, text=True, cwd=ROOT, timeout=30)
+    assert r2.returncode != 0 and "upstox" in (r2.stdout + r2.stderr)
+    # kite abhi bhi default
+    r3 = subprocess.run([sys.executable, "-m", "apps.engine.main", "live",
+                         "--instrument", "NSE:TESTCO", "--mode", "dry_run",
+                         "--speed", "0", "--limit", "40"],
+                        capture_output=True, text=True, cwd=ROOT, timeout=60)
+    assert r3.returncode == 0, f"kite CLI failed: {r3.stderr[-400:]}"
+
+
+def t_p6_pyproject_dhan_extra():
+    import tomllib
+    with open(ROOT / "pyproject.toml", "rb") as f:
+        pp = tomllib.load(f)
+    extras = pp["project"]["optional-dependencies"]
+    assert "dhanhq" in " ".join(extras["dhan"]), "dhan extra missing"
+    assert "dhanhq" in " ".join(extras["all"]), "all extra mein dhanhq missing"
+    # .env.example mein dhan creds hain (commented)
+    env = (ROOT / ".env.example").read_text()
+    assert "# DHAN_CLIENT_ID=" in env and "# DHAN_ACCESS_TOKEN=" in env
+
+
+def t_p6_dashboard_build():
+    dash = ROOT / "apps" / "dashboard"
+    if not (dash / "node_modules" / ".bin" / "vite").exists():
+        skip("dashboard build", "node_modules nahi — npm install karo")
+        return
+    r = subprocess.run(["npm", "run", "build"], capture_output=True, text=True,
+                       cwd=dash, timeout=180)
+    assert r.returncode == 0, f"build failed: {r.stderr[-500:]}"
+    assert (dash / "dist" / "index.html").exists()
+    # Live page bundle mein hai
+    js = list((dash / "dist" / "assets").glob("*.js"))
+    assert js, "no JS bundle"
+    assert "Live Trading" in js[0].read_text(errors="ignore"), "Live page missing from bundle"
+
+
+check("brokers: base conformance + factory + shim", t_p6_broker_base_conformance)
+check("brokers: dhan dry-run (fill/positions/square-off)", t_p6_dhan_broker_dry_run)
+check("brokers: dhan live trader dry-run (cash invariant)", t_p6_dhan_live_trader_dry_run)
+check("brokers: available_brokers info", t_p6_available_brokers_info)
+check("CLI: live --broker dhan (dry-run + invalid)", t_p6_cli_live_broker)
+check("packaging: dhan extra + .env.example", t_p6_pyproject_dhan_extra)
+check("dashboard: production build with Live page", t_p6_dashboard_build)
+
+# ============================================================
 print("\n🌐 PHASE 3 — API + Dashboard (live servers)")
 # ============================================================
 
@@ -643,7 +813,9 @@ if not api_up():
                  "API paper flow (start→stop→kill)", "dashboard proxy + preview host",
                  "API live dry-run flow (start→status→stop)",
                  "API live gates (live mode blocked without env)",
-                 "API kill-switch kills live too"]:
+                 "API kill-switch kills live too",
+                 "API brokers list (kite + dhan)",
+                 "API live dhan dry-run + invalid broker gate"]:
         skip(name, "API server nahi chal raha (python -m apps.api.main)")
 else:
     def t_api_health():
@@ -790,6 +962,48 @@ else:
     check("API live dry-run flow (start→status→stop)", t_api_live_dry_run_flow)
     check("API live gates (live mode blocked without env)", t_api_live_gates)
     check("API kill-switch kills live too", t_api_kill_switch_live)
+
+    def t_api_brokers():
+        r = http_get(API + "/brokers")
+        names = {b["name"] for b in r["brokers"]}
+        assert {"kite", "dhan"} <= names, names
+        info = {b["name"]: b for b in r["brokers"]}
+        assert info["kite"]["required_env"] == ["KITE_API_KEY"]
+        assert info["dhan"]["required_env"] == ["DHAN_CLIENT_ID"]
+        # sandbox mein creds nahi — live disabled bhi dikhe
+        assert r["live_trading_enabled"] is False
+
+    def t_api_live_dhan_dry_run():
+        # dhan broker, dry_run → chalega (replay prices, simulated orders)
+        r = http_post(API + "/live/start", {"instrument": "NSE:TESTCO",
+                                            "strategy": "ema_cross",
+                                            "mode": "dry_run", "broker": "dhan",
+                                            "capital": 1_000_000, "speed": 0.05,
+                                            "limit": 60})
+        assert r["status"] == "started" and r["broker"] == "dhan", r
+        time.sleep(1.5)
+        s = http_get(API + "/live/status")
+        assert s["running"] is True and s["mode"] == "dry_run"
+        assert len(s["equity_curve"]) > 0
+        http_post(API + "/live/stop")
+        # invalid broker → 400
+        try:
+            http_post(API + "/live/start", {"instrument": "NSE:TESTCO",
+                                            "mode": "dry_run", "broker": "upstox"})
+            raise AssertionError("invalid broker allowed (expected 400)")
+        except urllib.error.HTTPError as e:
+            assert e.code == 400, f"expected 400, got {e.code}"
+        # live mode with dhan but no env gate → 400
+        try:
+            http_post(API + "/live/start", {"instrument": "NSE:TESTCO", "mode": "live",
+                                            "broker": "dhan", "capital": 10_000,
+                                            "confirm": "I UNDERSTAND THIS TRADES REAL MONEY"})
+            raise AssertionError("dhan live allowed without env gate (expected 400)")
+        except urllib.error.HTTPError as e:
+            assert e.code == 400, f"expected 400, got {e.code}"
+
+    check("API brokers list (kite + dhan)", t_api_brokers)
+    check("API live dhan dry-run + invalid broker gate", t_api_live_dhan_dry_run)
 
 # ============================================================
 # SUMMARY

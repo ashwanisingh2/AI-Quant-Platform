@@ -3,10 +3,12 @@ import Overview from './pages/Overview'
 import AgentConsole from './pages/AgentConsole'
 import Backtests from './pages/Backtests'
 import DataPage from './pages/Data'
+import Live from './pages/Live'
 import { apiGet, wsUrl } from './api'
 
 const TABS = [
   { id: 'overview', label: '📊 Overview' },
+  { id: 'live', label: '🟢 Live' },
   { id: 'agent', label: '🤖 Agent Console' },
   { id: 'backtests', label: '🧠 Backtests' },
   { id: 'data', label: '💾 Data' },
@@ -37,7 +39,7 @@ export default function App() {
     return () => ws && ws.close()
   }, [])
 
-  const Page = { overview: Overview, agent: AgentConsole, backtests: Backtests, data: DataPage }[tab]
+  const Page = { overview: Overview, live: Live, agent: AgentConsole, backtests: Backtests, data: DataPage }[tab]
 
   return (
     <div className="app">

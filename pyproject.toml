@@ -32,9 +32,10 @@ dependencies = [
 [project.optional-dependencies]
 llm = ["litellm>=1.50"]          # real LLM (OpenAI/Gemini/...) via LiteLLM
 kite = ["kiteconnect>=5.0"]       # live Zerodha Kite trading (dry-run bina iske chalta hai)
+dhan = ["dhanhq>=2.0"]            # live Dhan trading (dry-run bina iske chalta hai)
 dashboard = []                    # dashboard ke liye: cd apps/dashboard && npm install
 dev = ["pytest>=8.0", "ruff>=0.6", "pyyaml>=6.0"]
-all = ["litellm>=1.50", "kiteconnect>=5.0"]
+all = ["litellm>=1.50", "kiteconnect>=5.0", "dhanhq>=2.0"]
 
 [project.urls]
 Homepage = "https://github.com/ai-quant-platform/ai-quant-platform"

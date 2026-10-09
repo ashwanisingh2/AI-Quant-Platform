@@ -116,8 +116,13 @@ def cmd_live(args) -> None:
     import asyncio
     import os
 
-    from apps.engine.kite_broker import KiteBroker
-    from apps.engine.live import KiteQuotePriceSource, LiveTrader, ReplayPriceSource
+    from apps.engine.brokers import available_brokers, get_broker
+    from apps.engine.live import (
+        DhanQuotePriceSource,
+        KiteQuotePriceSource,
+        LiveTrader,
+        ReplayPriceSource,
+    )
     from libs.risk.engine import RiskEngine
 
     if args.mode == "live" and os.environ.get("LIVE_TRADING_ENABLED", "false").lower() != "true":
@@ -140,15 +145,30 @@ def cmd_live(args) -> None:
                 print(f"   ▶ {t}")
 
         exchange, _, symbol = args.instrument.partition(":")
-        broker = KiteBroker(dry_run=(args.mode == "dry_run"),
-                            api_key=os.environ.get("KITE_API_KEY"),
-                            access_token=os.environ.get("KITE_ACCESS_TOKEN"))
-        if os.environ.get("KITE_API_KEY"):
-            source = KiteQuotePriceSource(exchange, symbol,
-                                          api_key=os.environ.get("KITE_API_KEY"),
-                                          access_token=os.environ.get("KITE_ACCESS_TOKEN"))
-        else:
+        # broker creds (env se) + live quote source per broker
+        known = {b["name"]: b for b in available_brokers()}
+        if args.broker not in known:
+            raise SystemExit(f"❌ Unknown broker '{args.broker}'. Available: {', '.join(sorted(known))}")
+        creds_present = all(os.environ.get(v) for v in known[args.broker]["required_env"])
+        kwargs: dict = {}
+        source = None
+        if args.broker == "kite":
+            kwargs = {"api_key": os.environ.get("KITE_API_KEY"),
+                      "access_token": os.environ.get("KITE_ACCESS_TOKEN")}
+            if creds_present:
+                source = KiteQuotePriceSource(exchange, symbol,
+                                              api_key=kwargs["api_key"],
+                                              access_token=kwargs["access_token"])
+        elif args.broker == "dhan":
+            kwargs = {"client_id": os.environ.get("DHAN_CLIENT_ID"),
+                      "access_token": os.environ.get("DHAN_ACCESS_TOKEN")}
+            if creds_present:
+                source = DhanQuotePriceSource(exchange, symbol,
+                                              client_id=kwargs["client_id"],
+                                              access_token=kwargs["access_token"])
+        if source is None:
             source = ReplayPriceSource(args.instrument, speed=args.speed, limit=args.limit)
+        broker = get_broker(args.broker, dry_run=(args.mode == "dry_run"), **kwargs)
         trader = LiveTrader(args.instrument, args.strategy, parse_set(args.set),
                             broker=broker, risk_engine=RiskEngine(),
                             price_source=source, on_event=on_event,
@@ -196,6 +216,7 @@ def main() -> None:
     lv.add_argument("--instrument", required=True)
     lv.add_argument("--strategy", default="ema_cross", choices=list(STRATEGIES.keys()))
     lv.add_argument("--mode", choices=["dry_run", "live"], default="dry_run")
+    lv.add_argument("--broker", default="kite", help="kite (Zerodha) ya dhan")
     lv.add_argument("--capital", type=float, default=1_000_000)
     lv.add_argument("--product", default="CNC", choices=["CNC", "MIS"], help="CNC=delivery (no leverage) — safe default")
     lv.add_argument("--speed", type=float, default=1.0, help="replay source speed (dry_run without kite creds)")

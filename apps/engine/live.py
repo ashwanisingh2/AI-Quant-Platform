@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 
-from apps.engine.kite_broker import KiteBroker
+from apps.engine.brokers.kite_broker import KiteBroker
 from apps.engine.strategies.evaluator import StrategyEvaluator
 from libs.risk.engine import RiskContext, RiskEngine, RiskLimits
 from libs.shared.models import Candle
@@ -70,6 +70,47 @@ class KiteQuotePriceSource:
             lp = data.get("last_price")
             if lp:
                 return lp, datetime.now(timezone.utc).isoformat()
+        except Exception as e:
+            self.last_error = str(e)
+        return None
+
+
+class DhanQuotePriceSource:
+    """Dhan se live LTP poll karta hai (dhanhq ticker_data REST)."""
+
+    SEGMENTS = {"NSE": "NSE_EQ", "BSE": "BSE_EQ"}
+
+    def __init__(self, exchange: str, symbol: str, client_id: str | None = None,
+                 access_token: str | None = None, poll_interval: float = 2.0):
+        self.exchange = exchange
+        self.symbol = symbol
+        self.poll_interval = poll_interval
+        self.last_error: str | None = None
+        self._dhan = None
+        self._token: str | None = None
+        if client_id:
+            from dhanhq import DhanContext, dhanhq  # lazy — optional dependency
+            self._dhan = dhanhq(DhanContext(client_id, access_token))
+
+    async def get_price(self) -> tuple[float, str] | None:
+        if self._dhan is None:
+            return None
+        try:
+            if self._token is None:
+                # security_id resolve (scrip master se — pehli baar slow, cache ho jata hai)
+                from apps.engine.brokers.dhan_broker import resolve_security_id
+                self._token = await asyncio.to_thread(
+                    resolve_security_id, self._dhan, self.exchange, self.symbol)
+            seg = self.SEGMENTS.get(self.exchange, "NSE_EQ")
+            df = await asyncio.to_thread(
+                self._dhan.ticker_data, {"securities": {seg: [int(self._token)]}}
+            )
+            rows = df.to_dict("records") if hasattr(df, "to_dict") else list(df or [])
+            if rows:
+                row = rows[0]
+                lp = row.get("last_price") or row.get("LTP") or row.get("ltp")
+                if lp:
+                    return float(lp), datetime.now(timezone.utc).isoformat()
         except Exception as e:
             self.last_error = str(e)
         return None

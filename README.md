@@ -47,7 +47,7 @@ cd apps/dashboard && npm install && npm run dev
 # Browser → http://localhost:5173
 ```
 
-**Dashboard pages:** 📊 Overview (P&L, positions, equity chart, **KILL SWITCH**, paper trading controls) · 🤖 Agent Console (AI signals + reasoning trace + approve/reject) · 🧠 Backtests (run + saved results) · 💾 Data (fetch + candlestick charts)
+**Dashboard pages:** 📊 Overview (P&L, positions, equity chart, **KILL SWITCH**, paper trading controls) · 🟢 **Live** (multi-broker live/dry-run trading, positions, orders, kill switch) · 🤖 Agent Console (AI signals + reasoning trace + approve/reject) · 🧠 Backtests (run + saved results) · 💾 Data (fetch + candlestick charts)
 
 ## 🧩 CLIs
 
@@ -147,11 +147,12 @@ ai-quant-platform/
 │   ├── engine/         # ✅ Phase 1 — Nautilus backtests, strategies, CLI
 │   │   ├── paper.py    # ✅ Phase 3 — paper trader (replay/live, kill switch)
 │   │   ├── strategies/evaluator.py  # ✅ Phase 4 — shared strategy logic (paper + live)
-│   │   ├── kite_broker.py           # ✅ Phase 4 — Kite adapter (dry_run default, live gated)
-│   │   └── live.py                  # ✅ Phase 4 — LiveTrader + price sources (replay/Kite)
+│   │   ├── kite_broker.py           # ✅ Phase 6 — compat shim (neeche dekho)
+│   │   ├── brokers/                 # ✅ Phase 6 — multi-broker: base + kite + dhan + factory
+│   │   └── live.py                  # ✅ Phase 4 — LiveTrader + price sources (replay/Kite/Dhan)
 │   ├── agent/          # ✅ Phase 2 — AI pipeline, LLM clients, registry, FastAPI + CLI
-│   ├── api/            # ✅ Phase 3+4 — orchestration API (REST + WebSocket, live endpoints)
-│   └── dashboard/      # ✅ Phase 3 — React + Vite (4 pages, live charts)
+│   ├── api/            # ✅ Phase 3+4+6 — orchestration API (REST + WebSocket, live + brokers)
+│   └── dashboard/      # ✅ Phase 3+6 — React + Vite (5 pages, live charts, Live trading page)
 ├── libs/
 │   ├── shared/         # models (Candle, Signal, AgentRun...) + charts
 │   ├── storage/        # Parquet + DuckDB store
@@ -179,14 +180,14 @@ ai-quant-platform/
 ## 🧪 Testing
 
 ```bash
-# Full test suite — Phase 0, 1, 2, 3, 4, 5 (46 tests)
+# Full test suite — Phase 0, 1, 2, 3, 4, 5, 6 (55 tests)
 # API/dashboard tests ke liye servers chalne chahiye (yeh auto-SKIP hote hain agar band hon)
 python -m apps.api.main &          # port 8000
 cd apps/dashboard && npm run dev & # port 5173
 python scripts/test_all.py
 ```
 
-Covers: data fetch/store/dedupe · backtests (stats + equity curve) · AI pipeline + risk veto · signal registry · paper trader (cash invariant) · kill switch · **risk engine (11 rules + audit trail)** · **strategy evaluator** · **Kite broker dry-run (fills, positions, square-off)** · **live trader dry-run + kill** · API endpoints · paper flow · **live API flow + safety gates + kill-switch** · dashboard proxy · **Phase 5: packaging (pyproject + entry points) · docker stack · .env safety · CI workflow · community files · demo script**.
+Covers: data fetch/store/dedupe · backtests (stats + equity curve) · AI pipeline + risk veto · signal registry · paper trader (cash invariant) · kill switch · **risk engine (11 rules + audit trail)** · **strategy evaluator** · **Kite broker dry-run (fills, positions, square-off)** · **live trader dry-run + kill** · API endpoints · paper flow · **live API flow + safety gates + kill-switch** · dashboard proxy · **Phase 5: packaging (pyproject + entry points) · docker stack · .env safety · CI workflow · community files · demo script** · **Phase 6: broker base conformance + factory · Dhan dry-run · Dhan live trader · /brokers API · live broker selection + gates · CLI --broker · dashboard production build**.
 
 ## 🛡️ Phase 5 — OSS Release
 
@@ -197,6 +198,31 @@ Covers: data fetch/store/dedupe · backtests (stats + equity curve) · AI pipeli
 - **🤝 Community** — [CONTRIBUTING.md](CONTRIBUTING.md) · [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) · [SECURITY.md](SECURITY.md) (responsible disclosure — real money wala project) · issue/PR templates (PR template mein **safety checklist** hai).
 - **📜 MIT License** — NautilusTrader (LGPL) library ki tarah use hota hai, explicitly allowed.
 
+## 🏭 Phase 6 — Multi-Broker + Live Dashboard
+
+**Broker abstraction** (`apps/engine/brokers/`) — vnpy/ccxt wali multi-broker architecture. Ek `BrokerBase` interface, registry + factory se naya broker add karna = ek file:
+
+```
+apps/engine/brokers/
+├── base.py          # BrokerBase — same interface for all (connect, orders, positions, square_off...)
+├── kite_broker.py   # Zerodha (registry: "kite")
+└── dhan_broker.py   # Dhan (registry: "dhan") — security_id, NSE_EQ, CNC/INTRA mapping
+```
+
+- **Dhan support** — official `dhanhq` library (lazy import, `pip install .[dhan]`). Dry-run default, live gated (same 4 gates + `DHAN_CLIENT_ID`/`DHAN_ACCESS_TOKEN`). Dhan ki alag baatein handle ki gayi hain: security_id (string), `NSE_EQ` segments, `CNC`/`INTRA` products, `TRADED` status.
+- **Live Dashboard page** 🟢 — broker selector (creds dikhata hai), dry_run/live mode (live disabled until gates), instrument/strategy/capital, **confirm phrase box for live mode**, equity chart, positions, open orders, kill switch.
+- **API** — `GET /brokers` (available brokers + creds status) · `POST /live/start` ab `broker: "kite" | "dhan"` leta hai.
+- **CLI** — `aiq-engine live --broker dhan --mode dry_run ...`
+- **Aage ke brokers** (Upstox/Fyers) ke liye bas ek file + `@register_broker` — roadmap mein Phase 7.
+
+```bash
+# Dhan dry-run (bina paisa lagaye)
+python -m apps.engine.main live --instrument NSE:TESTCO --broker dhan --mode dry_run
+
+# API se brokers dekhna
+curl localhost:8000/brokers
+```
+
 ## 🗺️ Roadmap
 
 - [x] **Phase 0** — Data foundation (fetch → store → query)
@@ -204,8 +230,9 @@ Covers: data fetch/store/dedupe · backtests (stats + equity curve) · AI pipeli
 - [x] **Phase 2** — AI agent service (signals with reasoning trace, human approval)
 - [x] **Phase 3** — Dashboard (React) + orchestration API + paper trading
 - [x] **Phase 4** — Risk engine hardening + live trading (Kite, gated, dry-run default)
-- [x] **Phase 5** — OSS release (packaging, Docker, CI, community, docs) ← *abhi yahin hain*
-- [ ] **Phase 6** — More brokers (Dhan/Upstox/Fyers), F&O, mobile app, hosted SaaS
+- [x] **Phase 5** — OSS release (packaging, Docker, CI, community, docs)
+- [x] **Phase 6** — Multi-broker abstraction + Dhan + Live dashboard ← *abhi yahin hain*
+- [ ] **Phase 7** — More brokers (Upstox/Fyers), F&O, mobile app, hosted SaaS
 
 ## 📚 Design Docs
 

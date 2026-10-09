@@ -15,3 +15,7 @@ uvicorn>=0.29
 # Phase 4 (risk engine + Kite live trading)
 # Optional — sirf LIVE Kite trading ke liye; dry-run bina iske chalta hai
 kiteconnect>=5.0
+
+# Phase 6 (multi-broker: Dhan)
+# Optional — sirf LIVE Dhan trading ke liye; dry-run bina iske chalta hai
+# dhanhq>=2.0

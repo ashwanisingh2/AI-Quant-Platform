@@ -33,8 +33,13 @@ from pydantic import BaseModel
 from apps.agent.main import analyze as agent_analyze
 from apps.agent.registry import SignalRegistry
 from apps.data_gateway.main import get_provider
-from apps.engine.kite_broker import KiteBroker
-from apps.engine.live import KiteQuotePriceSource, LiveTrader, ReplayPriceSource
+from apps.engine.brokers import available_brokers, get_broker
+from apps.engine.live import (
+    DhanQuotePriceSource,
+    KiteQuotePriceSource,
+    LiveTrader,
+    ReplayPriceSource,
+)
 from apps.engine.paper import PaperTrader
 from apps.engine.runner import RESULTS_DIR as BACKTESTS_DIR
 from apps.engine.runner import run_backtest, save_results
@@ -125,9 +130,10 @@ class LiveStartRequest(BaseModel):
     strategy: str = "ema_cross"
     params: dict = {}
     mode: str = "dry_run"        # dry_run | live
+    broker: str = "kite"         # kite | dhan (registry se validate hota hai)
     capital: float = 100_000
     product: str = "CNC"         # CNC (delivery, no leverage) — safe default
-    speed: float = 1.0           # replay source speed (dry_run without kite creds)
+    speed: float = 1.0           # replay source speed (dry_run without broker creds)
     limit: int = 150
     confirm: str = ""            # live mode ke liye required
 
@@ -286,7 +292,39 @@ async def paper_stop():
     return {"status": "stopped"}
 
 
-# ---------- live trading (gated) ----------
+# ---------- live trading (gated, multi-broker) ----------
+def _broker_kwargs(broker_name: str) -> dict:
+    """Har broker ke live creds (env se) — constructor kwargs."""
+    if broker_name == "kite":
+        return {"api_key": os.environ.get("KITE_API_KEY"),
+                "access_token": os.environ.get("KITE_ACCESS_TOKEN")}
+    if broker_name == "dhan":
+        return {"client_id": os.environ.get("DHAN_CLIENT_ID"),
+                "access_token": os.environ.get("DHAN_ACCESS_TOKEN")}
+    return {}
+
+
+def _price_source(broker_name: str, exchange: str, symbol: str):
+    """Har broker ka live quote source (real LTP poll)."""
+    if broker_name == "kite":
+        return KiteQuotePriceSource(exchange, symbol,
+                                    api_key=os.environ.get("KITE_API_KEY"),
+                                    access_token=os.environ.get("KITE_ACCESS_TOKEN"))
+    if broker_name == "dhan":
+        return DhanQuotePriceSource(exchange, symbol,
+                                    client_id=os.environ.get("DHAN_CLIENT_ID"),
+                                    access_token=os.environ.get("DHAN_ACCESS_TOKEN"))
+    return None
+
+
+@app.get("/brokers")
+def brokers():
+    """Available brokers + unke creds present hain ya nahi."""
+    return {"brokers": available_brokers(),
+            "live_trading_enabled": LIVE_ENABLED,
+            "live_max_capital": LIVE_MAX_CAPITAL}
+
+
 @app.post("/live/start")
 async def live_start(req: LiveStartRequest):
     global live_trader
@@ -295,6 +333,13 @@ async def live_start(req: LiveStartRequest):
                             detail="Live trader pehle se chal raha hai — pehle stop karo")
     if req.mode not in ("dry_run", "live"):
         raise HTTPException(status_code=400, detail="mode 'dry_run' ya 'live' hona chahiye")
+
+    # broker validate (registry se)
+    known = {b["name"]: b for b in available_brokers()}
+    if req.broker not in known:
+        raise HTTPException(status_code=400,
+                            detail=f"Unknown broker '{req.broker}'. Available: {', '.join(sorted(known))}")
+    creds_present = all(os.environ.get(v) for v in known[req.broker]["required_env"])
 
     # ⚠️ LIVE MODE GATES — real money se pehle sab check
     if req.mode == "live":
@@ -309,28 +354,21 @@ async def live_start(req: LiveStartRequest):
         if req.capital > LIVE_MAX_CAPITAL:
             raise HTTPException(status_code=400,
                                 detail=f"Capital zyada hai — live max ₹{LIVE_MAX_CAPITAL:,.0f}")
-        if not os.environ.get("KITE_API_KEY"):
-            raise HTTPException(status_code=400, detail="KITE_API_KEY missing")
+        if not creds_present:
+            missing = ", ".join(known[req.broker]["required_env"])
+            raise HTTPException(status_code=400,
+                                detail=f"{req.broker.upper()} creds missing: {missing}")
 
     exchange, _, symbol = req.instrument.partition(":")
-    has_kite = bool(os.environ.get("KITE_API_KEY"))
 
     if req.mode == "live":
-        broker = KiteBroker(api_key=os.environ["KITE_API_KEY"],
-                            access_token=os.environ.get("KITE_ACCESS_TOKEN"),
-                            dry_run=False)
-        source = KiteQuotePriceSource(exchange, symbol,
-                                      api_key=os.environ["KITE_API_KEY"],
-                                      access_token=os.environ.get("KITE_ACCESS_TOKEN"))
+        broker = get_broker(req.broker, dry_run=False, **_broker_kwargs(req.broker))
+        source = _price_source(req.broker, exchange, symbol)
     else:
-        broker = KiteBroker(dry_run=True)
-        # dry_run = real prices (agar creds hain) + fake money
-        if has_kite:
-            source = KiteQuotePriceSource(exchange, symbol,
-                                          api_key=os.environ["KITE_API_KEY"],
-                                          access_token=os.environ.get("KITE_ACCESS_TOKEN"))
-        else:
-            source = ReplayPriceSource(req.instrument, speed=req.speed, limit=req.limit)
+        broker = get_broker(req.broker, dry_run=True)
+        # dry_run = real prices (agar creds hain) + fake money, warna replay
+        source = (_price_source(req.broker, exchange, symbol) if creds_present
+                  else ReplayPriceSource(req.instrument, speed=req.speed, limit=req.limit))
 
     risk = RiskEngine(RiskLimits(
         max_position_value=min(req.capital * 0.5, 200_000),
@@ -346,7 +384,8 @@ async def live_start(req: LiveStartRequest):
     except ValueError as e:
         live_trader = None
         raise HTTPException(status_code=400, detail=str(e))
-    return {"status": "started", "mode": broker.mode, "instrument": req.instrument}
+    return {"status": "started", "mode": broker.mode, "broker": req.broker,
+            "instrument": req.instrument}
 
 
 @app.post("/live/stop")
