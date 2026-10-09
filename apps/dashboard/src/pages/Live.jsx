@@ -77,7 +77,13 @@ export default function Live() {
   const stop = async () => { await apiPost('/live/stop'); load() }
   const kill = async () => {
     if (!confirm('🚨 KILL SWITCH — live + paper sab band, saari positions square off. Sure?')) return
-    await apiPost('/kill-switch'); load()
+    try {
+      const result = await apiPost('/kill-switch')
+      setMsg(result.manual_action_required
+        ? 'Trading stopped, but broker exits/cancellations are unconfirmed. Check your broker account immediately.'
+        : 'Trading stopped. Review your broker account to verify positions.')
+    } catch { setMsg('Kill request failed. Check and close positions directly with your broker.') }
+    load()
   }
 
   const running = status?.running
@@ -93,16 +99,21 @@ export default function Live() {
         <div className="stat"><div className="label">Cash</div><div className="value mono">₹{fmt(status?.cash)}</div></div>
         <div className="stat"><div className="label">P&L</div><div className={`value mono ${pnl >= 0 ? 'pos' : 'neg'}`}>{pnl >= 0 ? '+' : ''}{pnl}%</div></div>
         <div className="stat"><div className="label">Mode</div><div className="value">{status?.mode ?? '—'}</div></div>
-        <div className="stat"><div className="label">Status</div><div className="value">{running ? '🟢 RUNNING' : status?.killed ? '🚨 KILLED' : '⚪ IDLE'}</div></div>
+        <div className="stat"><div className="label">Status</div><div className="value">{status?.last_error ? '🔴 ERROR — STOPPED' : running ? '🟢 RUNNING' : status?.killed ? '🚨 KILLED' : '⚪ IDLE'}</div></div>
       </div>
 
+      {status?.last_error && <p role="alert">{status.last_error.message}</p>}
+      {status?.kill_result?.manual_action_required && <p role="alert">
+        Emergency exit incomplete or unconfirmed. Check broker orders and positions immediately.
+      </p>}
+      {status?.portfolio_available === false && <p role="alert">Broker portfolio unavailable. Displayed balances cannot be verified.</p>}
       <div className="card">
         <div className="row" style={{ justifyContent: 'space-between' }}>
           <h3>🚨 Emergency</h3>
           <button className="btn kill" onClick={kill}>KILL SWITCH</button>
         </div>
         <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>
-          Ek click → paper + live band, open orders cancel, saari positions square off.
+          Trading turant stop hoti hai; broker orders cancel aur positions close karne ki koshish hoti hai. Result aur broker account verify karo.
         </p>
       </div>
 

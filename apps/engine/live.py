@@ -208,6 +208,8 @@ class LiveTrader:
                            if strategy != "ai_agent" else None)
         self.running = False
         self.killed = False
+        self.last_error: dict | None = None
+        self.kill_result: dict | None = None
         self._task: asyncio.Task | None = None
         self._last_price: float | None = None
         self.equity_curve: list[float] = []
@@ -230,20 +232,71 @@ class LiveTrader:
             self._task.cancel()
 
     def kill(self):
-        """🚨 Kill switch — open orders cancel + saari positions square off."""
+        """Stop locally, then attempt each broker action independently.
+
+        Submitted exit orders are not confirmed fills. Never retry them here:
+        reconcile with the broker before retrying an uncertain exit.
+        """
         self.killed = True
         self.running = False
         self.risk.kill()
-        try:
-            cancelled = [self.broker.cancel_order(o["order_id"])
-                         for o in self.broker.open_orders()]
-            squared = self.broker.square_off_all()
-        except Exception as e:
-            cancelled, squared = [], [{"error": str(e)}]
         if self._task:
             self._task.cancel()
-        self._emit_soon({"type": "kill", "cancelled_orders": len(cancelled),
-                         "squared_off": len(squared)})
+        if self.kill_result is not None:
+            return self.kill_result
+        result = {"status": "killed", "cancelled_orders": 0,
+                  "exit_orders_submitted": 0, "squared_off": 0,
+                  "errors": [], "manual_action_required": False}
+        # Persist before broker calls so repeated requests cannot duplicate exits.
+        self.kill_result = result
+
+        def failure(action, error_type):
+            result["errors"].append({"action": action, "error_type": error_type})
+
+        try:
+            orders = self.broker.open_orders()
+        except Exception as exc:
+            orders = []
+            failure("list_open_orders", type(exc).__name__)
+        for order in orders:
+            try:
+                response = self.broker.cancel_order(order["order_id"])
+                if response.get("status") == "CANCELLED":
+                    result["cancelled_orders"] += 1
+                else:
+                    failure("cancel_order", "CancellationUnconfirmed")
+            except Exception as exc:
+                failure("cancel_order", type(exc).__name__)
+        try:
+            positions = self.broker.positions()
+        except Exception as exc:
+            positions = []
+            failure("list_positions", type(exc).__name__)
+        for pos in positions:
+            try:
+                qty = pos["qty"]
+                if not qty:
+                    continue
+                response = self.broker.place_market_order(
+                    pos.get("exchange", "NSE"), pos["symbol"],
+                    "SELL" if qty > 0 else "BUY", abs(qty),
+                    product=pos.get("product") or self.product)
+                status = response.get("status")
+                if status == "COMPLETE":
+                    result["exit_orders_submitted"] += 1
+                    result["squared_off"] += 1
+                elif status in ("OPEN", "TRIGGER PENDING", "PART_TRADED"):
+                    result["exit_orders_submitted"] += 1
+                    failure("square_off", "FillUnconfirmed")
+                else:
+                    failure("square_off", "ExitRejectedOrUnknown")
+            except Exception as exc:
+                failure("square_off", type(exc).__name__)
+        if result["errors"]:
+            result["status"] = "incomplete"
+            result["manual_action_required"] = True
+        self._emit_soon({"type": "kill", **result})
+        return result
 
     async def _loop(self):
         try:
@@ -262,6 +315,15 @@ class LiveTrader:
                 await self._on_price(price, ts)
         except asyncio.CancelledError:
             pass
+        except Exception as exc:
+            self.running = False
+            self.risk.kill()
+            self.last_error = {"code": "trading_loop_failed",
+                               "error_type": type(exc).__name__,
+                               "message": "Trading stopped. Check broker orders and positions before restarting."}
+            await self._emit({"type": "live.error", "error": self.last_error})
+        finally:
+            self.running = False
 
     async def _on_price(self, price: float, ts: str):
         self._last_price = price
@@ -348,7 +410,21 @@ class LiveTrader:
             p["qty"] * (self._last_price or 0) for p in self.broker.positions())
 
     def state(self) -> dict:
+        # Operational state must remain readable even when the broker is down.
+        try:
+            return self._portfolio_state()
+        except Exception as exc:
+            return {"running": self.running, "killed": self.killed,
+                    "mode": self.broker.mode, "instrument": self.instrument,
+                    "risk_killed": self.risk.killed, "last_error": self.last_error,
+                    "kill_result": self.kill_result, "portfolio_available": False,
+                    "portfolio_error": type(exc).__name__}
+
+    def _portfolio_state(self) -> dict:
         return {
+            "last_error": self.last_error,
+            "kill_result": self.kill_result,
+            "portfolio_available": True,
             "running": self.running,
             "killed": self.killed,
             "mode": self.broker.mode,

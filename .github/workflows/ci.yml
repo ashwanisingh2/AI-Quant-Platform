@@ -40,7 +40,7 @@ jobs:
       - name: Authentication regression tests
         run: |
           pip install httpx
-          python -m unittest scripts.test_auth
+          python -m unittest scripts.test_auth scripts.test_failure_handling
 
       - name: Run full test suite
         run: |

@@ -504,10 +504,9 @@ async def kill_switch():
     global paper_trader, live_trader
     if paper_trader:
         paper_trader.kill()
-    if live_trader:
-        live_trader.kill()
-    await broadcast({"type": "kill", "message": "KILL SWITCH — sab band"})
-    return {"status": "killed"}
+    result = live_trader.kill() if live_trader else {"status": "killed"}
+    await broadcast({"type": "kill", **result})
+    return result
 
 
 # ---------- websocket ----------

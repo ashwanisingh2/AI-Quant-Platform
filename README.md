@@ -324,3 +324,23 @@ close on restart. Broker tokens are separate: obtain/renew them through the brok
 update the environment, restart, and verify connection before live trading. Automatic
 broker token refresh is not implemented. `/brokers` reports credential presence,
 not whether the broker accepted the token. Dhan/Fyers startup rejects error responses.
+
+### Development startup and failure handling
+
+`scripts/dev_api.sh` requires an exported, private `API_AUTH_TOKEN` of at least
+32 characters. It preserves that value, rejects CI tokens, never prints the token,
+and binds the API to `127.0.0.1`. Generate a token as described above; the script
+never reads credentials from the CI workflow.
+
+The kill switch stops local trading first and attempts cancellations and exits
+independently. Its response includes `cancelled_orders`, `exit_orders_submitted`,
+`squared_off` (confirmed COMPLETE responses only), and structured `errors`.
+`status: incomplete` / `manual_action_required: true` means the broker actions
+failed or were not confirmed. Inspect the broker account immediately; an accepted
+market order is not a confirmed fill. Repeated kill requests return the stored
+result to avoid duplicate exits; perform further recovery directly with the broker.
+
+Unexpected trading-loop failures stop the loop, activate the risk veto and emit
+`live.error`. `/live/status` retains the error even when portfolio reads fail.
+There is no automatic order retry or restart: reconcile broker orders/positions
+before starting again. Process restarts do not preserve these in-memory reports.
