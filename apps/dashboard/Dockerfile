@@ -1,10 +1,10 @@
 # AI Quant Dashboard — React/Vite build → nginx static + API/WS proxy
 # Build:  docker build -t ai-quant-dashboard ./apps/dashboard
 # Run:    docker run -p 5173:80 ai-quant-dashboard   (expects API reachable as "api" host)
-FROM node:20-alpine AS build
+FROM node:24-alpine AS build
 WORKDIR /app
-COPY package.json ./
-RUN npm install --no-audit --no-fund
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
 COPY . .
 RUN npm run build
 

@@ -20,10 +20,18 @@ services:
         required: false        # .env optional — defaults safe hain
     environment:
       - PYTHONUNBUFFERED=1
+      - API_AUTH_TOKEN=${API_AUTH_TOKEN:?Run python scripts/init_deployment.py first}
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
     volumes:
       - ./data:/app/data      # parquet data persist karta hai
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      test: ["CMD", "python", "-c", "import os,urllib.request; urllib.request.urlopen(urllib.request.Request('http://localhost:8000/ready',headers={'Authorization':'Bearer '+os.environ['API_AUTH_TOKEN']}),timeout=3)"]
       interval: 30s
       timeout: 5s
       retries: 3

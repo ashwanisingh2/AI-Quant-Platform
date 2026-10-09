@@ -21,7 +21,9 @@ COPY libs ./libs
 RUN pip install ".[kite]"
 
 # Data (parquet) — mount as volume in production
-RUN mkdir -p /app/data
+RUN groupadd --gid 10001 quant && useradd --uid 10001 --gid quant --no-create-home quant \
+    && mkdir -p /app/data && chown quant:quant /app/data
+USER quant
 VOLUME ["/app/data"]
 
 EXPOSE 8000

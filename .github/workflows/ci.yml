@@ -10,14 +10,15 @@ jobs:
   test:
     name: Test suite
     runs-on: ubuntu-latest
-    env:
-      API_AUTH_TOKEN: ci-only-test-token-not-a-production-secret-123456
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Generate ephemeral test credential
+        run: python -c "import os,secrets; open(os.environ['GITHUB_ENV'], 'a').write('API_AUTH_TOKEN=' + secrets.token_urlsafe(48) + '\n')"
 
       - name: Install package
         run: pip install -e ".[kite,dev]"
@@ -29,18 +30,25 @@ jobs:
             curl -sf http://localhost:8000/health && break
             sleep 1
           done
+          curl --fail http://localhost:8000/health
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/dashboard/package-lock.json
 
       - name: Start dashboard (vite)
         working-directory: apps/dashboard
         run: |
-          npm install --no-audit --no-fund
+          npm ci --no-audit --no-fund
           nohup npm run dev -- --host 0.0.0.0 --port 5173 > vite.log 2>&1 &
           sleep 5
 
       - name: Authentication regression tests
         run: |
           pip install httpx
-          python -m unittest scripts.test_auth scripts.test_failure_handling scripts.test_v2 scripts.test_radar scripts.test_storage_security scripts.test_data_integrity
+          python -m unittest scripts.test_auth scripts.test_failure_handling scripts.test_v2 scripts.test_radar scripts.test_storage_security scripts.test_data_integrity scripts.test_deployment
 
       - name: Run full test suite
         run: |
@@ -70,5 +78,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build all images
-        run: docker compose build
+      - name: Initialize private smoke-test configuration
+        run: |
+          python scripts/init_deployment.py
+          sudo install -d -o 10001 -g 10001 data
+      - name: Build and start containers
+        run: docker compose up --build -d --wait --wait-timeout 180
+      - name: Verify protected routes and dashboard
+        run: |
+          curl --fail http://localhost:5173/ >/dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:5173/api/ready)" = 401
+          docker compose exec -T api python -c "import os,urllib.request; request=urllib.request.Request('http://localhost:8000/ready',headers={'Authorization':'Bearer '+os.environ['API_AUTH_TOKEN']}); assert urllib.request.urlopen(request).status == 200"
+      - name: Clean up smoke-test containers
+        if: always()
+        run: docker compose down

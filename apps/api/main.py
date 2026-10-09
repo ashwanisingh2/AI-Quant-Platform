@@ -32,8 +32,9 @@ from pydantic import BaseModel, Field
 
 from apps.agent.main import analyze as agent_analyze
 from apps.agent.registry import SignalRegistry
-from apps.api.auth import AuthMiddleware, allowed_origins, authenticate_websocket
+from apps.api.auth import AuthMiddleware, allowed_origins, authenticate_websocket, configured_token
 from apps.api.radar import snapshot as radar_snapshot
+from apps.api.readiness import check_readiness
 from apps.data_gateway.main import get_provider
 from apps.engine.brokers import available_brokers, get_broker
 from apps.engine.live import (
@@ -577,8 +578,18 @@ def market_radar():
     return radar_snapshot()
 
 
+@app.get("/ready")
+def readiness():
+    result = check_readiness(ROOT / "data", journal)
+    if result["status"] != "ready":
+        raise HTTPException(status_code=503, detail=result)
+    return result
+
+
 def run():
     import uvicorn
+    if not configured_token():
+        raise SystemExit("Set a private API_AUTH_TOKEN of at least 32 characters before startup")
     print("🚀 AI Quant API on http://0.0.0.0:8000")
     if LIVE_ENABLED:
         print(f"⚠️  LIVE TRADING ENABLED (max capital ₹{LIVE_MAX_CAPITAL:,.0f})")
