@@ -8,6 +8,7 @@ Phase 3 ke API/dashboard tests ke liye servers chalne chahiye:
 Agar server nahi chal raha toh woh tests SKIP ho jayenge.
 """
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -536,8 +537,8 @@ def t_p5_docker_stack():
         dc = yaml.safe_load(f)
     svcs = dc["services"]
     assert set(svcs) == {"api", "dashboard"}, svcs.keys()
-    assert "8000:8000" in svcs["api"]["ports"]
-    assert "5173:80" in svcs["dashboard"]["ports"]
+    assert "127.0.0.1:8000:8000" in svcs["api"]["ports"]
+    assert "127.0.0.1:5173:80" in svcs["dashboard"]["ports"]
     assert svcs["api"]["build"] == "."
     assert svcs["dashboard"]["build"] == "./apps/dashboard"
     assert "healthcheck" in svcs["api"]
@@ -718,8 +719,8 @@ def t_p6_dhan_live_trader_dry_run():
 def t_p6_available_brokers_info():
     from apps.engine.brokers import available_brokers
     info = {b["name"]: b for b in available_brokers()}
-    assert info["kite"]["required_env"] == ["KITE_API_KEY"]
-    assert info["dhan"]["required_env"] == ["DHAN_CLIENT_ID"]
+    assert info["kite"]["required_env"] == ["KITE_API_KEY", "KITE_ACCESS_TOKEN"]
+    assert info["dhan"]["required_env"] == ["DHAN_CLIENT_ID", "DHAN_ACCESS_TOKEN"]
     # sandbox mein creds nahi hain
     assert info["kite"]["credentials_present"] is False
     assert info["dhan"]["credentials_present"] is False
@@ -1203,7 +1204,7 @@ print("\n🌐 PHASE 3 — API + Dashboard (live servers)")
 # ============================================================
 
 def http_get(url, headers=None):
-    req = urllib.request.Request(url, headers=headers or {})
+    req = urllib.request.Request(url, headers={"Authorization": "Bearer " + os.environ.get("API_AUTH_TOKEN", ""), **(headers or {})})
     with urllib.request.urlopen(req, timeout=15) as r:
         return json.loads(r.read())
 
@@ -1211,7 +1212,8 @@ def http_get(url, headers=None):
 def http_post(url, body=None):
     data = json.dumps(body or {}).encode()
     req = urllib.request.Request(url, data=data,
-                                 headers={"Content-Type": "application/json"})
+                                 headers={"Content-Type": "application/json",
+                                          "Authorization": "Bearer " + os.environ.get("API_AUTH_TOKEN", "")})
     with urllib.request.urlopen(req, timeout=60) as r:
         return json.loads(r.read())
 
@@ -1389,8 +1391,8 @@ else:
         names = {b["name"] for b in r["brokers"]}
         assert {"kite", "dhan"} <= names, names
         info = {b["name"]: b for b in r["brokers"]}
-        assert info["kite"]["required_env"] == ["KITE_API_KEY"]
-        assert info["dhan"]["required_env"] == ["DHAN_CLIENT_ID"]
+        assert info["kite"]["required_env"] == ["KITE_API_KEY", "KITE_ACCESS_TOKEN"]
+        assert info["dhan"]["required_env"] == ["DHAN_CLIENT_ID", "DHAN_ACCESS_TOKEN"]
         # sandbox mein creds nahi — live disabled bhi dikhe
         assert r["live_trading_enabled"] is False
 

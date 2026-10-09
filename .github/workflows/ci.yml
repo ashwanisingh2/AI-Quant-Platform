@@ -10,6 +10,8 @@ jobs:
   test:
     name: Test suite (40 tests)
     runs-on: ubuntu-latest
+    env:
+      API_AUTH_TOKEN: ci-only-test-token-not-a-production-secret-123456
     steps:
       - uses: actions/checkout@v4
 
@@ -35,8 +37,15 @@ jobs:
           nohup npm run dev -- --host 0.0.0.0 --port 5173 > vite.log 2>&1 &
           sleep 5
 
+      - name: Authentication regression tests
+        run: |
+          pip install httpx
+          python -m unittest scripts.test_auth
+
       - name: Run full test suite
-        run: python scripts/test_all.py
+        run: |
+          python -c "from apps.data_gateway.providers.mock_provider import MockProvider; from libs.storage.parquet_store import ParquetStore; [ParquetStore().write_candles(MockProvider().get_historical(s, days=120)) for s in ('TESTCO', 'INFY')]"
+          python scripts/test_all.py
 
       - name: API log (on failure)
         if: failure()

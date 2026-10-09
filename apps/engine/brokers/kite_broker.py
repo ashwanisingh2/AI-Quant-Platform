@@ -22,7 +22,7 @@ from apps.engine.brokers.base import BrokerBase
 @register_broker
 class KiteBroker(BrokerBase):
     name = "kite"
-    required_env = ("KITE_API_KEY",)
+    required_env = ("KITE_API_KEY", "KITE_ACCESS_TOKEN")
 
     def __init__(self, api_key: str | None = None, access_token: str | None = None,
                  dry_run: bool = True):
@@ -34,8 +34,8 @@ class KiteBroker(BrokerBase):
         self._token_cache: dict[tuple[str, str], int] = {}
         if not dry_run:
             from kiteconnect import KiteConnect  # lazy — optional dependency
-            if not api_key:
-                raise ValueError("KITE_API_KEY missing (live mode)")
+            if not api_key or not access_token:
+                raise ValueError("KITE_API_KEY / KITE_ACCESS_TOKEN missing (live mode)")
             self._kite = KiteConnect(api_key=api_key)
             if access_token:
                 self._kite.set_access_token(access_token)

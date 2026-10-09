@@ -29,7 +29,7 @@ from apps.engine.brokers.base import BrokerBase
 @register_broker
 class DhanBroker(BrokerBase):
     name = "dhan"
-    required_env = ("DHAN_CLIENT_ID",)
+    required_env = ("DHAN_CLIENT_ID", "DHAN_ACCESS_TOKEN")
 
     #: hamara exchange → Dhan ka exchange segment (equity cash + F&O)
     SEGMENTS = {"NSE": "NSE_EQ", "BSE": "BSE_EQ", "NFO": "NSE_FNO", "BFO": "BSE_FNO"}
@@ -51,8 +51,8 @@ class DhanBroker(BrokerBase):
         self._token_cache: dict[tuple[str, str], str] = {}
         if not dry_run:
             from dhanhq import DhanContext, dhanhq  # lazy — optional dependency
-            if not client_id:
-                raise ValueError("DHAN_CLIENT_ID missing (live mode)")
+            if not client_id or not access_token:
+                raise ValueError("DHAN_CLIENT_ID / DHAN_ACCESS_TOKEN missing (live mode)")
             self._dhan = dhanhq(DhanContext(client_id, access_token))
 
     @property
@@ -84,6 +84,8 @@ class DhanBroker(BrokerBase):
         if self.dry_run:
             return {"mode": "dry_run", "status": "connected (simulated)"}
         limits = self._dhan.get_fund_limits()  # token invalid → yahin fail hoga
+        if not isinstance(limits, dict) or limits.get("status") != "success":
+            raise ValueError("Dhan authentication check failed; renew broker credentials")
         self._reconcile()
         cash = None
         try:
