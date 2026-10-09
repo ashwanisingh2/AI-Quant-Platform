@@ -32,6 +32,7 @@ from pydantic import BaseModel
 
 from apps.agent.main import analyze as agent_analyze
 from apps.agent.registry import SignalRegistry
+from apps.api.auth import AuthMiddleware, allowed_origins, authenticate_websocket
 from apps.data_gateway.main import get_provider
 from apps.engine.brokers import available_brokers, get_broker
 from apps.engine.live import (
@@ -58,9 +59,10 @@ LIVE_MAX_CAPITAL = float(os.environ.get("LIVE_MAX_CAPITAL", "50000"))
 LIVE_CONFIRM_PHRASE = "I UNDERSTAND THIS TRADES REAL MONEY"
 
 app = FastAPI(title="AI Quant — API", version="0.2.0")
-# Dev ke liye open CORS — production mein tighten karna
-app.add_middleware(CORSMiddleware, allow_origins=["*"],
-                   allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(AuthMiddleware)
+app.add_middleware(CORSMiddleware, allow_origins=allowed_origins(),
+                   allow_methods=["GET", "POST"],
+                   allow_headers=["Authorization", "Content-Type"])
 
 # ---------- shared state ----------
 registry = SignalRegistry(AGENT_RUNS_DIR)
@@ -71,7 +73,6 @@ class ConnectionManager:
         self.connections: set[WebSocket] = set()
 
     async def connect(self, ws: WebSocket):
-        await ws.accept()
         self.connections.add(ws)
 
     def disconnect(self, ws: WebSocket):
@@ -450,14 +451,17 @@ async def live_start(req: LiveStartRequest):
 
     exchange, _, symbol = req.instrument.partition(":")
 
-    if req.mode == "live":
-        broker = get_broker(req.broker, dry_run=False, **_broker_kwargs(req.broker))
-        source = _price_source(req.broker, exchange, symbol)
-    else:
-        broker = get_broker(req.broker, dry_run=True)
-        # dry_run = real prices (agar creds hain) + fake money, warna replay
-        source = (_price_source(req.broker, exchange, symbol) if creds_present
-                  else ReplayPriceSource(req.instrument, speed=req.speed, limit=req.limit))
+    try:
+        if req.mode == "live":
+            broker = get_broker(req.broker, dry_run=False, **_broker_kwargs(req.broker))
+            source = _price_source(req.broker, exchange, symbol)
+        else:
+            broker = get_broker(req.broker, dry_run=True)
+            # dry_run = real prices (agar creds hain) + fake money, warna replay
+            source = (_price_source(req.broker, exchange, symbol) if creds_present
+                      else ReplayPriceSource(req.instrument, speed=req.speed, limit=req.limit))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Broker setup failed; check server credentials and SDK installation") from None
 
     risk = RiskEngine(RiskLimits(
         max_position_value=min(req.capital * 0.5, 200_000),
@@ -470,9 +474,9 @@ async def live_start(req: LiveStartRequest):
                              trading_hours_only=(req.mode == "live"))
     try:
         await live_trader.start()
-    except ValueError as e:
+    except Exception:
         live_trader = None
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail="Trading startup failed; check broker credentials and price data") from None
     return {"status": "started", "mode": broker.mode, "broker": req.broker,
             "instrument": req.instrument}
 
@@ -509,6 +513,8 @@ async def kill_switch():
 # ---------- websocket ----------
 @app.websocket("/ws/events")
 async def ws_events(ws: WebSocket):
+    if not await authenticate_websocket(ws):
+        return
     await manager.connect(ws)
     try:
         while True:

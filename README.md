@@ -27,7 +27,7 @@ python scripts/demo_phase4.py        # Phase 4: risk engine + live dry-run demo 
 ## 🐳 Docker — Poora Stack Ek Command Mein
 
 ```bash
-cp .env.example .env                 # apni values daalo (default: live DISABLED)
+cp .env.example .env                 # set API_AUTH_TOKEN; live defaults DISABLED
 docker compose up --build
 
 # Dashboard → http://localhost:5173   ·   API → http://localhost:8000
@@ -298,3 +298,29 @@ python -m apps.engine.main live --instrument NSE:NIFTY-23OCT25-FUT --strategy em
 - [Exploration Doc](../ai-quant-platform-exploration.md) — idea, gap analysis, options
 - [Architecture Doc](../ai-quant-architecture.md) — full system design, DB schema, API spec
 - [Safety Doc](SAFETY.md) — live trading se pehle padhne zaroori
+
+## Operator authentication
+
+Generate a unique token with `python -c "import secrets; print(secrets.token_urlsafe(32))"`
+and set `API_AUTH_TOKEN` in `.env` (at least 32 characters). Docker Compose reads this
+file; for direct Python/CLI startup, export the variables in your shell first.
+Open the dashboard and enter this token to unlock it. Reloading the page or locking
+clears the dashboard token; it is kept in memory, never localStorage or a URL.
+
+All HTTP routes except `/health`, including API docs, require
+`Authorization: Bearer <API_AUTH_TOKEN>`. WebSockets require an initial JSON
+message `{"token":"<API_AUTH_TOKEN>"}` within five seconds; no events are sent
+before authentication. Browser WebSocket origins must match `API_ALLOWED_ORIGINS`.
+Missing or short server tokens deny access; there is no anonymous fallback.
+
+This is a **single-operator** model: the token grants all platform permissions.
+It does not provide multi-user accounts, roles, or broker OAuth callbacks. Use a
+trusted HTTPS reverse proxy for remote access (including WSS), set explicit origins,
+and keep the backend private. Compose publishes both ports on loopback by default.
+Never send a token over a remote HTTP connection.
+
+To rotate the operator token, replace it and restart the backend; existing sockets
+close on restart. Broker tokens are separate: obtain/renew them through the broker,
+update the environment, restart, and verify connection before live trading. Automatic
+broker token refresh is not implemented. `/brokers` reports credential presence,
+not whether the broker accepted the token. Dhan/Fyers startup rejects error responses.

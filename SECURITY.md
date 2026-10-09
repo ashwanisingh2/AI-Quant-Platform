@@ -48,3 +48,6 @@ Key points:
 - `LIVE_TRADING_ENABLED` stays `false` until you are ready
 - Max capital limit (`LIVE_MAX_CAPITAL`) is your seatbelt — use it
 - Kill switch (`POST /kill-switch`) must always work — test it in dry-run first
+
+API access is protected by a single operator bearer token; see README.md for setup,
+rotation, HTTPS deployment, WebSocket authentication and remaining limitations.

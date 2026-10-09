@@ -91,7 +91,9 @@ class FyersBroker(BrokerBase):
         """Connection test + reconciliation (real positions/orders sync — startup pe zaroori)."""
         if self.dry_run:
             return {"mode": "dry_run", "status": "connected (simulated)"}
-        self._fyers.funds()  # token invalid → yahin fail hoga
+        result = self._fyers.funds()
+        if not isinstance(result, dict) or result.get("s") != "ok":
+            raise ValueError("Fyers authentication check failed; renew broker credentials")
         self._reconcile()
         return {"mode": "live", "status": "connected"}
 
