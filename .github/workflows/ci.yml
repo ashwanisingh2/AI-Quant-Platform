@@ -8,7 +8,7 @@ on:
 
 jobs:
   test:
-    name: Test suite (40 tests)
+    name: Test suite
     runs-on: ubuntu-latest
     env:
       API_AUTH_TOKEN: ci-only-test-token-not-a-production-secret-123456
@@ -20,7 +20,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install package
-        run: pip install -e ".[kite]"
+        run: pip install -e ".[kite,dev]"
 
       - name: Start API server
         run: |

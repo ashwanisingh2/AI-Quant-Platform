@@ -42,6 +42,33 @@ def skip(name: str, why: str):
     print(f"  ⏭️  {name} — SKIP ({why})")
 
 
+def seed_mock_data():
+    """Fresh clone / CI mein data store empty hota hai — yahaan mock se seed karte hain.
+
+    data/ git-ignored hai, toh har naye environment mein pehle ye chalao.
+    Deterministic mock (seed=42) → local aur CI mein same candles.
+    Idempotent: agar data already hai toh kuch nahi karta.
+    """
+    from apps.data_gateway.providers.mock_provider import MockProvider
+    from libs.storage.parquet_store import ParquetStore
+    store = ParquetStore()
+    needs = {  # instrument → days (tests ke hisaab se)
+        "TESTCO": 120,
+        "INFY": 60,
+        "NIFTY-23OCT25-FUT": 90,  # F&O live/replay tests
+    }
+    missing = [sym for sym, days in needs.items() if not store.read_candles(f"NSE:{sym}")]
+    if not missing:
+        return
+    print(f"\n🌱 Seeding mock data (fresh environment): {', '.join(missing)}")
+    mp = MockProvider()
+    for sym in missing:
+        store.write_candles(mp.get_historical(sym, days=needs[sym]))
+        print(f"   ✅ NSE:{sym} — {needs[sym]} candles")
+
+
+seed_mock_data()
+
 # ============================================================
 print("\n📦 PHASE 0 — Data Foundation")
 # ============================================================
