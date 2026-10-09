@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test suite (40 tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package
+        run: pip install -e ".[kite]"
+
+      - name: Start API server
+        run: |
+          nohup aiq-api > api.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8000/health && break
+            sleep 1
+          done
+
+      - name: Start dashboard (vite)
+        working-directory: apps/dashboard
+        run: |
+          npm install --no-audit --no-fund
+          nohup npm run dev -- --host 0.0.0.0 --port 5173 > vite.log 2>&1 &
+          sleep 5
+
+      - name: Run full test suite
+        run: python scripts/test_all.py
+
+      - name: API log (on failure)
+        if: failure()
+        run: tail -50 api.log
+
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - run: ruff check .
+
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build all images
+        run: docker compose build

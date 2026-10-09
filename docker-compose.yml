@@ -1,0 +1,42 @@
+# AI Quant Platform — poora stack ek command mein
+#
+#   cp .env.example .env      # apni values daalo (LIVE sirf jab taiyaar ho)
+#   docker compose up --build
+#
+#   Dashboard → http://localhost:5173   ·   API → http://localhost:8000
+#
+# ⚠️ Default mein LIVE TRADING DISABLED hai (.env.example dekho).
+#    Real money se pehle SAFETY.md padho!
+
+services:
+  api:
+    build: .
+    image: ai-quant-api:latest
+    container_name: aiq-api
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false        # .env optional — defaults safe hain
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./data:/app/data      # parquet data persist karta hai
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  dashboard:
+    build: ./apps/dashboard
+    image: ai-quant-dashboard:latest
+    container_name: aiq-dashboard
+    ports:
+      - "5173:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped

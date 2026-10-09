@@ -1,0 +1,17 @@
+# Core (Phase 0 — data foundation)
+pydantic>=2.0
+pyarrow>=14.0
+duckdb>=0.9
+requests>=2.31
+
+# Phase 1 (backtest engine)
+nautilus_trader>=1.231
+
+# Phase 2 (AI agent service)
+fastapi>=0.110
+uvicorn>=0.29
+# litellm>=1.50   # optional — real LLM ke liye (pip install litellm)
+
+# Phase 4 (risk engine + Kite live trading)
+# Optional — sirf LIVE Kite trading ke liye; dry-run bina iske chalta hai
+kiteconnect>=5.0

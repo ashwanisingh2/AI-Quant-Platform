@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-quant-platform"
+version = "0.5.0"
+description = "India-first, AI-native, open-source trading platform — backtests, AI agents, paper & live trading (Zerodha Kite), dashboard."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "AI Quant Platform" }]
+keywords = ["trading", "backtesting", "ai-agents", "zerodha", "kite", "nse", "india", "nautilus-trader"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
+dependencies = [
+    "pydantic>=2.0",
+    "pyarrow>=14.0",
+    "duckdb>=0.9",
+    "requests>=2.31",
+    "nautilus_trader>=1.231",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+]
+
+[project.optional-dependencies]
+llm = ["litellm>=1.50"]          # real LLM (OpenAI/Gemini/...) via LiteLLM
+kite = ["kiteconnect>=5.0"]       # live Zerodha Kite trading (dry-run bina iske chalta hai)
+dashboard = []                    # dashboard ke liye: cd apps/dashboard && npm install
+dev = ["pytest>=8.0", "ruff>=0.6", "pyyaml>=6.0"]
+all = ["litellm>=1.50", "kiteconnect>=5.0"]
+
+[project.urls]
+Homepage = "https://github.com/ai-quant-platform/ai-quant-platform"
+Documentation = "https://github.com/ai-quant-platform/ai-quant-platform#readme"
+"Safety (read before live trading!)" = "https://github.com/ai-quant-platform/ai-quant-platform/blob/main/SAFETY.md"
+
+[project.scripts]
+aiq-data = "apps.data_gateway.main:main"
+aiq-engine = "apps.engine.main:main"
+aiq-agent = "apps.agent.main:main"
+aiq-api = "apps.api.main:run"
+
+[tool.setuptools.packages.find]
+include = ["apps*", "libs*"]
+
+[tool.setuptools.package-data]
+"libs.prompts" = ["**/*.md"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]  # long strings (Hinglish messages) allowed
+
+[tool.pytest.ini_options]
+testpaths = ["scripts"]
+python_files = ["test_*.py"]

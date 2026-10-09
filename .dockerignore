@@ -1,0 +1,14 @@
+# Build context se bahar rakho
+data/
+node_modules/
+__pycache__/
+*.pyc
+.git/
+.github/
+.env
+*.egg-info/
+apps/dashboard/dist/
+apps/dashboard/node_modules/
+.dockerignore
+Dockerfile
+docker-compose.yml
