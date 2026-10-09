@@ -5,8 +5,10 @@ returns, Sharpe, drawdown, equity curve nikalta hai.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+import uuid
 import warnings
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -78,8 +80,11 @@ def run_backtest(
     start: date | None = None,
     end: date | None = None,
     capital: float = 1_000_000,
+    cost_bps: float = 0.0,
 ) -> dict:
     """Ek backtest chalao aur results dict return karo."""
+    if not math.isfinite(capital) or capital <= 0 or not math.isfinite(cost_bps) or not 0 <= cost_bps <= 1000:
+        raise ValueError('Positive capital and cost_bps between 0 and 1000 required')
     spec = STRATEGIES[strategy_name]
     params = {**spec["defaults"], **(params or {})}
 
@@ -107,10 +112,23 @@ def run_backtest(
     equity_curve = compute_equity_curve(bars, fills_df, capital)
     final_equity = equity_curve[-1] if equity_curve else capital
 
+    # Transparent post-fill cost estimate, not a broker-specific tax/fill model.
+    turnover = sum(abs(float(r['quantity']) * float(r['avg_px'])) for _, r in fills_df.iterrows()) if len(fills_df) else 0.0
+    estimated_cost = turnover * cost_bps / 10000
+    digest = hashlib.sha256('\n'.join(str(b) for b in bars).encode()).hexdigest()
     start_dt = datetime.fromtimestamp(bars[0].ts_event / 1e9, tz=timezone.utc).date()
     end_dt = datetime.fromtimestamp(bars[-1].ts_event / 1e9, tz=timezone.utc).date()
 
     return {
+        "run_id": uuid.uuid4().hex,
+        "kernel_version": "2.0.0",
+        "data_sha256": digest,
+        "signal_trace": strategy.signal_trace,
+        "cost_model": {"kind": "post_fill_turnover_bps", "bps": cost_bps},
+        "estimated_cost_inr": round(estimated_cost, 2),
+        "net_return_pct": round((final_equity - estimated_cost - capital) / capital * 100, 2),
+        "benchmark_return_pct": round((bars[-1].close.as_double() / bars[0].close.as_double() - 1) * 100, 2),
+        "validation": "in_sample_only",
         "instrument": instrument,
         "strategy": strategy_name,
         "params": params,
@@ -120,7 +138,7 @@ def run_backtest(
         "initial_capital": capital,
         "final_equity": round(final_equity, 2),
         "total_return_pct": round((final_equity / capital - 1) * 100, 2),
-        "max_drawdown_pct": _max_drawdown_pct(equity_curve),
+        "max_drawdown_pct": _max_drawdown_pct([capital, *equity_curve]),
         "sharpe_ratio": stats_returns.get("Sharpe Ratio (252 days)"),
         "n_trades": int(len(fills_df)),
         "win_rate_pct": stats_general.get("Win rate [%]"),
@@ -136,6 +154,6 @@ def save_results(results: dict) -> Path:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     inst = results["instrument"].replace(":", "_")
-    path = RESULTS_DIR / f"{inst}_{results['strategy']}_{ts}.json"
+    path = RESULTS_DIR / f"{inst}_{results['strategy']}_{ts}_{results.get('run_id', uuid.uuid4().hex)}.json"
     path.write_text(json.dumps(results, indent=2))
     return path

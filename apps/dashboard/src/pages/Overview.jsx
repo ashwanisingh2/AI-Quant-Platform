@@ -60,7 +60,8 @@ export default function Overview() {
   const stopPaper = async () => { await apiPost('/paper/stop'); load() }
   const kill = async () => {
     if (!confirm('🚨 KILL SWITCH — saari positions close ho jayengi. Sure?')) return
-    await apiPost('/kill-switch'); load()
+    try { const result = await apiPost('/kill-switch'); if (result.manual_action_required) alert('Emergency exits are incomplete. Check broker orders and positions immediately.') } catch { alert('Kill request failed. Check your broker account immediately.') }
+    load()
   }
 
   const pnl = portfolio?.total_pnl_pct ?? 0
@@ -74,7 +75,7 @@ export default function Overview() {
         <div className="stat"><div className="label">Cash</div><div className="value mono">₹{fmt(portfolio?.cash)}</div></div>
         <div className="stat"><div className="label">Total P&L</div><div className={`value mono ${pnl >= 0 ? 'pos' : 'neg'}`}>{pnl >= 0 ? '+' : ''}{pnl}%</div></div>
         <div className="stat"><div className="label">Orders</div><div className="value mono">{portfolio?.n_orders ?? 0}</div></div>
-        <div className="stat"><div className="label">Status</div><div className="value">{running ? '🟢 LIVE' : portfolio?.killed ? '🚨 KILLED' : '⚪ IDLE'}</div></div>
+        <div className="stat"><div className="label">Status</div><div className="value">{running ? 'PAPER RUNNING' : portfolio?.killed ? '🚨 KILLED' : '⚪ IDLE'}</div></div>
       </div>
 
       <div className="card">
@@ -110,7 +111,7 @@ export default function Overview() {
           </div>
         </div>
         <p className="muted" style={{ marginTop: 8, fontSize: 12 }}>
-          Replay mode: stored candles live ki tarah feed hote hain — real prices, fake money.
+          Replay mode: stored candles live ki tarah feed hote hain — stored prices (source dependent), simulated money.
           AI signals sirf human approval ke baad execute hote hain.
         </p>
       </div>
