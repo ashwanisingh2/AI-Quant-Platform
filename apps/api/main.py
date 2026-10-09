@@ -25,7 +25,7 @@ import os
 from datetime import date
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -262,8 +262,11 @@ async def data_fetch(req: FetchRequest):
 
 
 @app.get("/data/candles")
-def data_candles(instrument: str, limit: int = 200):
-    candles = ParquetStore().read_candles(instrument)[-limit:]
+def data_candles(instrument: str, limit: int = Query(default=200, ge=1, le=5000)):
+    try:
+        candles = ParquetStore().read_candles(instrument)[-limit:]
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="Invalid instrument identifier") from error
     return {"instrument": instrument,
             "candles": [json.loads(c.model_dump_json()) for c in candles]}
 

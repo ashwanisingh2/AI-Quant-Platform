@@ -1,4 +1,5 @@
 import os
+import secrets
 import unittest
 from datetime import datetime, timedelta
 from unittest.mock import Mock, patch
@@ -56,11 +57,12 @@ class RadarTests(unittest.TestCase):
         from fastapi.testclient import TestClient
 
         from apps.api.main import app
-        with patch.dict(os.environ, {'API_AUTH_TOKEN': 'radar-unit-test-token-at-least-32-characters'}):
+        operator_token = secrets.token_urlsafe(32)
+        with patch.dict(os.environ, {'API_AUTH_TOKEN': operator_token}):
             client = TestClient(app)
             self.assertEqual(client.get('/radar').status_code, 401)
             with patch('apps.api.main.radar_snapshot', return_value={'coverage': 0}):
-                result = client.get('/radar', headers={'Authorization': 'Bearer radar-unit-test-token-at-least-32-characters'})
+                result = client.get('/radar', headers={'Authorization': f'Bearer {operator_token}'})
                 self.assertEqual(result.status_code, 200)
 
 

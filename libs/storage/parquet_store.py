@@ -9,6 +9,7 @@ All timestamps: IST, naive.
 """
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from pathlib import Path
 
@@ -23,7 +24,9 @@ DEFAULT_ROOT = Path(__file__).resolve().parents[2] / "data" / "ohlcv"
 
 def instrument_key(instrument: str) -> str:
     """'NSE:RELIANCE' → 'NSE_RELIANCE' (filesystem-safe)"""
-    return instrument.replace(":", "_").replace("/", "_")
+    if not re.fullmatch(r"[A-Z][A-Z0-9]{1,15}:[A-Z0-9][A-Z0-9&_.-]{0,79}", instrument):
+        raise ValueError("Invalid instrument identifier")
+    return instrument.replace(":", "_", 1)
 
 
 def instrument_from_dir(dir_name: str) -> str:
@@ -35,6 +38,12 @@ class ParquetStore:
     def __init__(self, root: Path | str = DEFAULT_ROOT):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
+
+    def _instrument_directory(self, instrument: str) -> Path:
+        directory = self.root / instrument_key(instrument)
+        if not directory.resolve().is_relative_to(self.root.resolve()):
+            raise ValueError("Instrument directory escapes storage root")
+        return directory
 
     # ---------- write ----------
     def write_candles(self, candles: list[Candle]) -> int:
@@ -48,7 +57,7 @@ class ParquetStore:
 
         total = 0
         for (instrument, month), group in sorted(groups.items()):
-            path = self.root / instrument_key(instrument) / f"{month.year}-{month.month:02d}.parquet"
+            path = self._instrument_directory(instrument) / f"{month.year}-{month.month:02d}.parquet"
             path.parent.mkdir(parents=True, exist_ok=True)
 
             rows: list[dict] = []
@@ -73,7 +82,7 @@ class ParquetStore:
         end: date | None = None,
     ) -> list[Candle]:
         """Stored candles wapas lo (optionally date range mein)."""
-        d = self.root / instrument_key(instrument)
+        d = self._instrument_directory(instrument)
         if not d.is_dir() or not any(d.glob("*.parquet")):
             return []
         q = (
@@ -88,7 +97,8 @@ class ParquetStore:
             q += " AND timestamp <= ?"
             params.append(datetime(end.year, end.month, end.day, 23, 59, 59))
         q += " ORDER BY timestamp"
-        rows = duckdb.connect().execute(q, params).fetchall()
+        with duckdb.connect() as connection:
+            rows = connection.execute(q, params).fetchall()
         return [
             Candle(instrument=r[0], timestamp=r[1], open=r[2],
                    high=r[3], low=r[4], close=r[5], volume=r[6])
