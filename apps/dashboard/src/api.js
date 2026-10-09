@@ -6,6 +6,7 @@ const authHeaders = () => ({ Authorization: `Bearer ${token}` })
 
 export async function apiGet(path) {
   const r = await fetch(BASE + path, { headers: authHeaders() })
+  if (r.status === 401 && token) window.dispatchEvent(new Event('auth-expired'))
   if (!r.ok) throw new Error(await r.text())
   return r.json()
 }
@@ -16,6 +17,7 @@ export async function apiPost(path, body = {}) {
     headers: { ...authHeaders(), 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
+  if (r.status === 401 && token) window.dispatchEvent(new Event('auth-expired'))
   if (!r.ok) throw new Error(await r.text())
   return r.json()
 }

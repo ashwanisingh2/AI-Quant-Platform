@@ -539,7 +539,7 @@ def t_p5_packaging():
     with open(ROOT / "pyproject.toml", "rb") as f:
         pp = tomllib.load(f)
     assert pp["project"]["name"] == "ai-quant-platform"
-    assert pp["project"]["version"] == "0.6.0"
+    assert pp["project"]["version"] == "2.0.0a1"
     assert pp["project"]["license"]["text"] == "MIT"
     scripts = pp["project"]["scripts"]
     assert set(scripts) == {"aiq-data", "aiq-engine", "aiq-agent", "aiq-api"}, scripts

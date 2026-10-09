@@ -1,0 +1,36 @@
+import { useEffect, useState } from 'react'
+import { apiGet, apiPost } from '../api'
+
+export default function Operations({ navigate }) {
+  const [data, setData] = useState(null)
+  const [error, setError] = useState('')
+  const [selected, setSelected] = useState(null)
+  const [note, setNote] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [busy, setBusy] = useState(false)
+  const refresh = async () => {
+    try { setData(await apiGet('/operations')); setError('') }
+    catch { setError('Operations data is unavailable. Check the API connection.'); setData(null) }
+  }
+  useEffect(() => { refresh(); const timer = setInterval(refresh, 10000); return () => clearInterval(timer) }, [])
+  const reconcile = async e => {
+    e.preventDefault(); setBusy(true)
+    try { await apiPost(`/operations/runs/${selected}/reconcile`, { note, confirm }); setSelected(null); setNote(''); setConfirm(''); await refresh() }
+    catch (e) { setError(e.message) }
+    finally { setBusy(false) }
+  }
+  const when = value => value ? new Date(value).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' }) : '—'
+  return <div>
+    {error && <div className="notice danger" role="alert">{error}<button className="btn ghost sm" onClick={refresh}>Retry</button></div>}
+    <section className="command-hero"><div><span className="eyebrow">FROM IDEA TO ACCOUNTABLE EXECUTION</span><h2>Your next move,<br />with the full picture.</h2><p>Inspect the data. Test the strategy. Review every session before capital goes live.</p><button className="btn" onClick={() => navigate('backtests')}>Open strategy lab ↗</button><button className="btn hero-secondary" onClick={() => navigate('data')}>Explore market data</button></div><div className="flow-visual" aria-label="Research, validate, execute workflow"><div><span>01</span><strong>Research</strong><small>Data + model context</small></div><div><span>02</span><strong>Validate</strong><small>Shared decision kernel</small></div><div><span>03</span><strong>Execute</strong><small>Risk + durable intents</small></div></div></section>
+    <div className="grid metric-grid">
+      <div className="stat"><div className="label">MARKET DATA</div><div className="value">{data?.data_instruments ?? '—'} <small>instruments</small></div><p>Stored locally for research</p></div>
+      <div className="stat"><div className="label">BROKER CONFIGURATION</div><div className="value">{data ? data.brokers.filter(b => b.credentials_present).length : '—'} <small>/ {data?.brokers.length ?? '—'} configured</small></div><p>Presence only · not connection verification</p></div>
+      <div className="stat"><div className="label">RECOVERY REVIEW</div><div className={`value ${data?.unresolved_live_runs ? 'neg' : ''}`}>{data?.unresolved_live_runs ?? '—'} <small>live sessions</small></div><p>Unresolved sessions block new live runs</p></div>
+    </div>
+    <div className="operations-columns"><section className="card"><div className="section-head"><h3>Operating state</h3><span className="badge hold">V2 FOUNDATION</span></div><div className="system-row"><span>Execution engine</span><strong>{data?.engine ?? '—'}</strong></div><div className="system-row"><span>Strategy logic</span><strong>{data?.strategy_kernel ?? '—'}</strong></div><div className="system-row"><span>Research provider</span><strong>{data?.research_mode ?? '—'}</strong></div><div className="system-row"><span>Live order routing</span><span className={`badge ${data?.live_enabled ? 'sell' : 'hold'}`}>{data ? data.live_enabled ? 'Enabled' : 'Disabled' : 'Unknown'}</span></div><div className="notice">Broker credentials, data quality and execution outcomes must be verified independently.</div></section><section className="card"><div className="section-head"><h3>Boundaries, made visible</h3><span className="tiny-label">CURRENT RELEASE</span></div>{(data?.limitations ?? []).map((item, index) => <div className="boundary-item" key={item}><span>{String(index + 1).padStart(2, '0')}</span><p>{item}</p></div>)}{!data && <p className="muted">Connect to the API to load release capabilities.</p>}</section></div>
+    <section className="card"><div className="section-head"><div><h3>Execution ledger</h3><p className="muted">Session records survive API restarts. Times shown in IST.</p></div><button className="btn ghost sm" onClick={refresh}>Refresh</button></div><div className="table-scroll"><table><thead><tr><th>Session</th><th>Instrument</th><th>Broker</th><th>Mode</th><th>State</th><th>Started</th><th>Recovery</th></tr></thead><tbody>{data?.runs.map(run => <tr key={run.id}><td className="mono">{run.id.slice(0, 8)}</td><td className="mono">{run.instrument}</td><td>{run.broker}</td><td><span className={`badge ${run.mode === 'live' ? 'sell' : 'hold'}`}>{run.mode}</span></td><td>{run.state.replaceAll('_', ' ')}</td><td>{when(run.created_at)}</td><td>{run.mode === 'live' && run.state !== 'reconciled' ? <button className="btn ghost sm" onClick={() => { setSelected(run.id); setConfirm(''); setNote('') }}>Review</button> : '—'}</td></tr>)}</tbody></table></div>{!data?.runs.length && <div className="empty-state"><span>▤</span><h4>No execution sessions yet</h4><p>Start a dry-run session to see its lifecycle and order records here.</p><button className="btn ghost" onClick={() => navigate('live')}>Open execution →</button></div>}</section>
+    <section className="card"><div className="section-head"><h3>Order intent trail</h3><span className="tiny-label">LATEST 100</span></div><div className="table-scroll"><table><thead><tr><th>Intent</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Purpose</th><th>Outcome</th><th>Broker order</th></tr></thead><tbody>{data?.intents.map(row => <tr key={row.id}><td className="mono">{row.id.slice(0, 8)}</td><td>{row.symbol}</td><td>{row.side}</td><td>{row.qty}</td><td>{row.purpose}</td><td><span className={`badge ${['unknown', 'prepared'].includes(row.state) ? 'adjust' : 'hold'}`}>{row.state}</span></td><td className="mono">{row.broker_order_id || 'Unconfirmed'}</td></tr>)}</tbody></table></div>{!data?.intents.length && <p className="table-empty">No order intents recorded. No broker activity is implied.</p>}</section>
+    {selected && <div className="modal-backdrop"><form className="recovery-modal" onSubmit={reconcile} aria-label="Reconcile trading session"><span className="eyebrow">OPERATOR RECONCILIATION</span><h2>Verify with your broker first.</h2><p>Review every open order, fill and position in the broker account. This records your confirmation; it does not query or close broker positions.</p><label htmlFor="recovery-note">What did you verify? (minimum 20 characters)</label><textarea id="recovery-note" value={note} onChange={e => setNote(e.target.value)} minLength={20} maxLength={1000} required /><label htmlFor="recovery-confirm">Type: I VERIFIED BROKER ORDERS AND POSITIONS</label><input id="recovery-confirm" value={confirm} onChange={e => setConfirm(e.target.value)} required /><div className="row"><button className="btn" disabled={busy || confirm !== 'I VERIFIED BROKER ORDERS AND POSITIONS'}>Record verification</button><button className="btn ghost" type="button" onClick={() => setSelected(null)}>Cancel</button></div>{error && <p role="alert" className="neg">{error}</p>}</form></div>}
+  </div>
+}

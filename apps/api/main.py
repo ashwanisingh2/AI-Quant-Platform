@@ -28,7 +28,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from apps.agent.main import analyze as agent_analyze
 from apps.agent.registry import SignalRegistry
@@ -48,6 +48,7 @@ from apps.engine.runner import RESULTS_DIR as BACKTESTS_DIR
 from apps.engine.runner import run_backtest, save_results
 from apps.engine.strategies import STRATEGIES
 from libs.risk.engine import RiskEngine, RiskLimits
+from libs.storage.execution_journal import ExecutionJournal
 from libs.storage.parquet_store import ParquetStore, instrument_from_dir
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -58,7 +59,7 @@ LIVE_ENABLED = os.environ.get("LIVE_TRADING_ENABLED", "false").lower() == "true"
 LIVE_MAX_CAPITAL = float(os.environ.get("LIVE_MAX_CAPITAL", "50000"))
 LIVE_CONFIRM_PHRASE = "I UNDERSTAND THIS TRADES REAL MONEY"
 
-app = FastAPI(title="AI Quant — API", version="0.2.0")
+app = FastAPI(title="AI Quant — API", version="2.0.0a1")
 app.add_middleware(AuthMiddleware)
 app.add_middleware(CORSMiddleware, allow_origins=allowed_origins(),
                    allow_methods=["GET", "POST"],
@@ -66,6 +67,7 @@ app.add_middleware(CORSMiddleware, allow_origins=allowed_origins(),
 
 # ---------- shared state ----------
 registry = SignalRegistry(AGENT_RUNS_DIR)
+journal = ExecutionJournal(os.environ.get("EXECUTION_DB", str(ROOT / "data" / "execution.sqlite3")))
 
 
 class ConnectionManager:
@@ -100,22 +102,23 @@ class FetchRequest(BaseModel):
     provider: str = "mock"
     symbol: str
     exchange: str = "NSE"
-    days: int = 60
+    days: int = Field(default=60, ge=1, le=10000)
 
 
 class BacktestRequest(BaseModel):
     instrument: str
     strategy: str
     params: dict = {}
+    cost_bps: float = Field(default=0, ge=0, le=1000, allow_inf_nan=False)
     start: str | None = None
     end: str | None = None
-    capital: float = 1_000_000
+    capital: float = Field(default=1_000_000, gt=0, le=1_000_000_000, allow_inf_nan=False)
 
 
 class AnalyzeRequest(BaseModel):
     instrument: str
     llm: str = "auto"
-    capital: float = 1_000_000
+    capital: float = Field(default=1_000_000, gt=0, le=1_000_000_000, allow_inf_nan=False)
     config: dict = {}
 
 
@@ -123,9 +126,9 @@ class PaperStartRequest(BaseModel):
     instrument: str
     strategy: str = "ema_cross"
     params: dict = {}
-    capital: float = 1_000_000
-    speed: float = 0.5
-    limit: int = 150
+    capital: float = Field(default=1_000_000, gt=0, le=1_000_000_000, allow_inf_nan=False)
+    speed: float = Field(default=0.5, ge=0, le=3600, allow_inf_nan=False)
+    limit: int = Field(default=150, ge=35, le=100000)
 
 
 class LiveStartRequest(BaseModel):
@@ -134,10 +137,10 @@ class LiveStartRequest(BaseModel):
     params: dict = {}
     mode: str = "dry_run"        # dry_run | live
     broker: str = "kite"         # kite | dhan (registry se validate hota hai)
-    capital: float = 100_000
+    capital: float = Field(default=100_000, gt=0, le=1_000_000_000, allow_inf_nan=False)
     product: str = "CNC"         # CNC (delivery, no leverage) — safe default
-    speed: float = 1.0           # replay source speed (dry_run without broker creds)
-    limit: int = 150
+    speed: float = Field(default=1.0, ge=0, le=3600, allow_inf_nan=False)           # replay source speed (dry_run without broker creds)
+    limit: int = Field(default=150, ge=35, le=100000)
     confirm: str = ""            # live mode ke liye required
 
 
@@ -270,7 +273,7 @@ async def backtests(req: BacktestRequest):
         start = date.fromisoformat(req.start) if req.start else None
         end = date.fromisoformat(req.end) if req.end else None
         results = await run_in_threadpool(
-            run_backtest, req.instrument, req.strategy, req.params, start, end, req.capital
+            run_backtest, req.instrument, req.strategy, req.params, start, end, req.capital, req.cost_bps
         )
         save_results(results)
         return results
@@ -284,10 +287,11 @@ def list_backtests():
     if BACKTESTS_DIR.exists():
         for p in sorted(BACKTESTS_DIR.glob("*.json"), reverse=True)[:30]:
             r = json.loads(p.read_text())
-            out.append({k: r[k] for k in (
+            out.append({k: r.get(k) for k in (
                 "instrument", "strategy", "params", "start", "end",
                 "total_return_pct", "sharpe_ratio", "max_drawdown_pct",
-                "n_trades", "created_at")})
+                "n_trades", "created_at", "run_id", "data_sha256", "kernel_version",
+                "net_return_pct", "estimated_cost_inr", "benchmark_return_pct", "validation")})
     return {"backtests": out}
 
 
@@ -467,18 +471,23 @@ async def live_start(req: LiveStartRequest):
         max_position_value=min(req.capital * 0.5, 200_000),
         trading_hours_only=(req.mode == "live"),  # replay/simulation mein hours check nahi
     ))
-    live_trader = LiveTrader(req.instrument, req.strategy, req.params,
-                             broker=broker, risk_engine=risk, price_source=source,
-                             on_event=broadcast, signal_registry=registry,
-                             capital=req.capital, product=req.product,
-                             trading_hours_only=(req.mode == "live"))
     try:
+        run_id = journal.create_run(req.broker, req.instrument, req.mode)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+    try:
+        live_trader = LiveTrader(req.instrument, req.strategy, req.params,
+                                 broker=broker, risk_engine=risk, price_source=source,
+                                 on_event=broadcast, signal_registry=registry,
+                                 capital=req.capital, product=req.product, journal=journal, run_id=run_id,
+                                 trading_hours_only=(req.mode == "live"))
         await live_trader.start()
     except Exception:
+        journal.transition(run_id, "startup_failed")
         live_trader = None
         raise HTTPException(status_code=400, detail="Trading startup failed; check broker credentials and price data") from None
     return {"status": "started", "mode": broker.mode, "broker": req.broker,
-            "instrument": req.instrument}
+            "instrument": req.instrument, "run_id": run_id}
 
 
 @app.post("/live/stop")
@@ -509,12 +518,46 @@ async def kill_switch():
     return result
 
 
+# ---------- durable operations ----------
+class ReconcileRequest(BaseModel):
+    confirm: str
+    note: str = Field(min_length=20, max_length=1000)
+
+
+@app.get("/operations")
+def operations():
+    snapshot = journal.snapshot()
+    return {**snapshot, "version": "2.0.0a1", "engine": "NautilusTrader",
+            "strategy_kernel": "shared-v2", "live_enabled": LIVE_ENABLED,
+            "brokers": available_brokers(), "market": "India",
+            "research_mode": "LLM configured" if os.environ.get("LLM_API_KEY") else "Mock / deterministic",
+            "data_instruments": len(ParquetStore().list_instruments()),
+            "deployment": "single-operator / single-process",
+            "limitations": ["Broker fills require reconciliation", "F&O chain is synthetic",
+                            "Backtests are in-sample; costs are estimates",
+                            "Broker OAuth renewal is manual"]}
+
+
+@app.post("/operations/runs/{run_id}/reconcile")
+def reconcile_run(run_id: str, req: ReconcileRequest):
+    if req.confirm != "I VERIFIED BROKER ORDERS AND POSITIONS":
+        raise HTTPException(400, "Exact broker-verification confirmation required")
+    if live_trader and live_trader.run_id == run_id and live_trader.running:
+        raise HTTPException(409, "Stop the active session before reconciliation")
+    try:
+        journal.reconcile(run_id, req.note)
+    except KeyError:
+        raise HTTPException(404, "Run not found") from None
+    return {"status": "reconciled", "run_id": run_id, "method": "operator_attestation"}
+
+
 # ---------- websocket ----------
 @app.websocket("/ws/events")
 async def ws_events(ws: WebSocket):
     if not await authenticate_websocket(ws):
         return
     await manager.connect(ws)
+    await ws.send_json({"type": "connection.ready"})
     try:
         while True:
             await ws.receive_text()  # keep-alive; client messages ignored

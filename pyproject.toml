@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ai-quant-platform"
-version = "0.6.0"
+version = "2.0.0a1"
 description = "India-first, AI-native, open-source trading platform — backtests, AI agents, paper & live trading (Zerodha Kite), dashboard."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -40,9 +40,9 @@ dev = ["pytest>=8.0", "ruff>=0.6", "pyyaml>=6.0"]
 all = ["litellm>=1.50", "kiteconnect>=5.0", "dhanhq>=2.0", "upstox-python-sdk>=2.0", "fyers-apiv3>=3.0"]
 
 [project.urls]
-Homepage = "https://github.com/ai-quant-platform/ai-quant-platform"
-Documentation = "https://github.com/ai-quant-platform/ai-quant-platform#readme"
-"Safety (read before live trading!)" = "https://github.com/ai-quant-platform/ai-quant-platform/blob/main/SAFETY.md"
+Homepage = "https://github.com/ashwanisingh2/AI-Quant-Platform"
+Documentation = "https://github.com/ashwanisingh2/AI-Quant-Platform#readme"
+"Safety (read before live trading!)" = "https://github.com/ashwanisingh2/AI-Quant-Platform/blob/main/SAFETY.md"
 
 [project.scripts]
 aiq-data = "apps.data_gateway.main:main"

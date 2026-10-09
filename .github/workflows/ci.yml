@@ -40,12 +40,15 @@ jobs:
       - name: Authentication regression tests
         run: |
           pip install httpx
-          python -m unittest scripts.test_auth scripts.test_failure_handling
+          python -m unittest scripts.test_auth scripts.test_failure_handling scripts.test_v2
 
       - name: Run full test suite
         run: |
           python -c "from apps.data_gateway.providers.mock_provider import MockProvider; from libs.storage.parquet_store import ParquetStore; [ParquetStore().write_candles(MockProvider().get_historical(s, days=120)) for s in ('TESTCO', 'INFY')]"
           python scripts/test_all.py
+
+      - name: Dashboard production build
+        run: npm run build --prefix apps/dashboard
 
       - name: API log (on failure)
         if: failure()

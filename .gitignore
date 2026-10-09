@@ -12,3 +12,6 @@ data/backtests/
 data/agent_runs/
 .pytest_cache/
 .ruff_cache/
+
+# Private execution journal and SQLite WAL/SHM sidecars
+data/execution.sqlite3*

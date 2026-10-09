@@ -190,7 +190,8 @@ class LiveTrader:
                  params: dict | None = None, broker: KiteBroker | None = None,
                  risk_engine: RiskEngine | None = None, price_source=None,
                  on_event=None, signal_registry=None, capital: float = 100_000,
-                 product: str = "CNC", trading_hours_only: bool = True):
+                 product: str = "CNC", trading_hours_only: bool = True,
+                 journal=None, run_id: str | None = None):
         self.instrument = instrument  # "NSE:TESTCO"
         self.exchange, _, self.symbol = instrument.partition(":")
         self.strategy = strategy
@@ -203,6 +204,8 @@ class LiveTrader:
         self.signal_registry = signal_registry
         self.capital = capital
         self.product = product
+        self.journal = journal
+        self.run_id = run_id
 
         self._evaluator = (StrategyEvaluator(strategy, self.params)
                            if strategy != "ai_agent" else None)
@@ -221,6 +224,8 @@ class LiveTrader:
         if isinstance(self.price_source, ReplayPriceSource):
             self.price_source.load()
         conn = await asyncio.to_thread(self.broker.connect)
+        if self.journal:
+            self.journal.transition(self.run_id, "running")
         self.running = True
         self._task = asyncio.create_task(self._loop())
         await self._emit({"type": "live.started", "mode": self.broker.mode,
@@ -230,6 +235,8 @@ class LiveTrader:
         self.running = False
         if self._task:
             self._task.cancel()
+        if self.journal:
+            self.journal.transition(self.run_id, "stopped")
 
     def kill(self):
         """Stop locally, then attempt each broker action independently.
@@ -277,10 +284,10 @@ class LiveTrader:
                 qty = pos["qty"]
                 if not qty:
                     continue
-                response = self.broker.place_market_order(
+                response = self._submit_order(
                     pos.get("exchange", "NSE"), pos["symbol"],
                     "SELL" if qty > 0 else "BUY", abs(qty),
-                    product=pos.get("product") or self.product)
+                    product=pos.get("product") or self.product, purpose="emergency_exit")
                 status = response.get("status")
                 if status == "COMPLETE":
                     result["exit_orders_submitted"] += 1
@@ -295,6 +302,12 @@ class LiveTrader:
         if result["errors"]:
             result["status"] = "incomplete"
             result["manual_action_required"] = True
+        if self.journal:
+            try:
+                self.journal.transition(self.run_id, "recovery_required")
+            except Exception:
+                failure("journal", "WriteFailed")
+                result.update(status="incomplete", manual_action_required=True)
         self._emit_soon({"type": "kill", **result})
         return result
 
@@ -324,6 +337,13 @@ class LiveTrader:
             await self._emit({"type": "live.error", "error": self.last_error})
         finally:
             self.running = False
+            if self.journal:
+                try:
+                    self.journal.transition(self.run_id, "recovery_required" if self.last_error or not self.broker.dry_run else "stopped")
+                except Exception:
+                    self.risk.kill()
+                    self.last_error = {"code": "journal_unavailable", "message": "Trading stopped. Journal unavailable; verify broker state before recovery."}
+                    await self._emit({"type": "live.error", "error": self.last_error})
 
     async def _on_price(self, price: float, ts: str):
         self._last_price = price
@@ -387,10 +407,24 @@ class LiveTrader:
             self._emit_soon({"type": "live.rejected", "reason": decision.reason,
                              "checks": decision.checks})
             return None
-        order = self.broker.place_market_order(
+        order = self._submit_order(
             self.exchange, self.symbol, side, int(qty), product=self.product)
         self._emit_soon({"type": "live.order", "order": order,
                          "risk": decision.as_dict()})
+        return order
+
+    def _submit_order(self, exchange, symbol, side, qty, product="CNC", purpose="strategy"):
+        # Persist intent before external side effects. Unknown outcomes must be
+        # reconciled by the operator, never retried automatically.
+        intent = self.journal.intent(self.run_id, f"{exchange}:{symbol}", side, qty, purpose) if self.journal else None
+        try:
+            order = self.broker.place_market_order(exchange, symbol, side, qty, product=product)
+        except Exception:
+            if self.journal:
+                self.journal.outcome(intent, "unknown")
+            raise
+        if self.journal:
+            self.journal.outcome(intent, order.get("status", "unknown"), order.get("order_id"))
         return order
 
     def _cash(self) -> float:
@@ -417,11 +451,12 @@ class LiveTrader:
             return {"running": self.running, "killed": self.killed,
                     "mode": self.broker.mode, "instrument": self.instrument,
                     "risk_killed": self.risk.killed, "last_error": self.last_error,
-                    "kill_result": self.kill_result, "portfolio_available": False,
+                    "kill_result": self.kill_result, "run_id": self.run_id, "portfolio_available": False,
                     "portfolio_error": type(exc).__name__}
 
     def _portfolio_state(self) -> dict:
         return {
+            "run_id": self.run_id,
             "last_error": self.last_error,
             "kill_result": self.kill_result,
             "portfolio_available": True,

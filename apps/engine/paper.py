@@ -92,6 +92,8 @@ class PaperTrader:
                 await self._emit({"type": "paper.finished", "reason": "data khatam ho gaya"})
         except asyncio.CancelledError:
             pass
+        finally:
+            self.running = False
 
     async def _on_candle(self, c: Candle):
         price = c.close
