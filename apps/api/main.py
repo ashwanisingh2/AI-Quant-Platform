@@ -251,14 +251,16 @@ async def data_fetch(req: FetchRequest):
         candles = provider.get_historical(req.symbol, days=req.days, exchange=req.exchange)
         if not candles:
             raise ValueError("Provider se koi data nahi mila")
-        ParquetStore().write_candles(candles)
+        ParquetStore().write_candles(candles, source=provider.name)
         return {"instrument": candles[0].instrument, "candles": len(candles),
                 "from": str(candles[0].timestamp.date()),
                 "to": str(candles[-1].timestamp.date())}
     try:
         return await run_in_threadpool(_do)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="Invalid provider configuration or candle data") from error
+    except (OSError, TimeoutError) as error:
+        raise HTTPException(status_code=503, detail="Data import unavailable; retry after checking provider and storage health") from error
 
 
 @app.get("/data/candles")

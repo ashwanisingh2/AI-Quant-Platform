@@ -52,3 +52,11 @@ then perform broker-specific sandbox/account validation under operator control.
 No automatic tests here send real orders. No profitability or unattended-live
 certification is implied. Multi-process deployment and automated reconciliation
 are outside this release.
+
+## Daily data integrity and release gates
+
+New API and CLI imports retain provider identity per candle. Legacy imports remain unknown; partially overwriting unknown or mock history never verifies the entire dataset. Provider-recorded is an origin label, not proof of accuracy or corporate-action adjustment. Radar excludes today's candles conservatively and flags history older than seven calendar days; this is not an exchange holiday calendar. Its data remains historical.
+
+Parquet files use atomic replacement and a process-local writer lock. Run one API worker; multiple independent writers/processes are unsupported. File replacement prevents partial-file reads but is not a transactional multi-month commit. Back up only after stopping writers, and test restore in an isolated directory before relying on a backup.
+
+Remaining release gates (not yet passed): licensed live feed and entitlement checks; authoritative F&O/sector master and exchange calendar; corporate-action adjustments; actual broker timeout, partial-fill and reconnect reconciliation; out-of-sample strategy validation; alert delivery and backup restore drills; deployment/TLS and load testing. Keep live execution disabled until those gates are independently verified. No code-only test establishes these external conditions.

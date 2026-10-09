@@ -1,9 +1,12 @@
 """Explainable daily radar. No broker calls or execution side effects."""
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import date, datetime
 from math import isfinite
 from statistics import mean
 from zoneinfo import ZoneInfo
+
+import duckdb
+import pyarrow
 
 from libs.storage.parquet_store import ParquetStore, instrument_from_dir
 
@@ -61,11 +64,16 @@ def snapshot(store=None, now=None):
             excluded.append({'instrument': instrument, 'reason': 'Unsupported exchange'})
             continue
         try:
-            row = score_daily(store.read_candles(instrument))
+            history = store.read_candles(instrument)
+            completed_history = [candle for candle in history if candle.timestamp.date().isoformat() < today]
+            row = score_daily(completed_history)
+            row["provenance"] = store.provenance(instrument)
+            row["age_calendar_days"] = (date.fromisoformat(today) - date.fromisoformat(row["session"])).days
+            row["freshness"] = "stale" if row["age_calendar_days"] > 7 else "historical"
             if row['session'] > today:
                 raise ValueError('Future session')
             rows.append(row)
-        except Exception:
+        except (ValueError, OSError, duckdb.Error, pyarrow.ArrowException):
             excluded.append({'instrument': instrument, 'reason': 'Unreadable or invalid daily history; need 21 sessions'})
     session = max((r['session'] for r in rows), default=None)
     eligible = [r for r in rows if r['session'] == session]
@@ -80,7 +88,7 @@ def snapshot(store=None, now=None):
     breadth = Counter('advancing' if r['change_pct'] > 0 else 'declining' if r['change_pct'] < 0 else 'unchanged' for r in eligible)
     return {
         'mode': 'stored_daily', 'provenance': 'unverified', 'session': session,
-        'notice': 'Stored daily data; may include mock candles. Not a live feed. Source provenance is not retained by the existing store.',
+        'notice': 'Historical daily data, not live. Today’s candles are excluded as potentially incomplete. Provider labels record origin, not independent verification.',
         'rows': eligible, 'breadth': {k: breadth[k] for k in ('advancing', 'declining', 'unchanged')},
         'sectors': sorted([{'sector': k, 'count': len(v), 'score': round(mean(r['score'] for r in v), 4)} for k, v in groups.items()], key=lambda s: -s['score']),
         'excluded': excluded, 'truncated': len(instruments) > 300,

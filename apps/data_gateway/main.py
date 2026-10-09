@@ -30,12 +30,12 @@ def get_provider(name: str):
         from apps.data_gateway.providers.kite_provider import KiteProvider
         api_key = os.environ.get("KITE_API_KEY")
         if not api_key:
-            raise SystemExit("❌ KITE_API_KEY env variable set karo (Kite Connect account se)")
+            raise ValueError("❌ KITE_API_KEY env variable set karo (Kite Connect account se)")
         return KiteProvider(
             api_key=api_key,
             access_token=os.environ.get("KITE_ACCESS_TOKEN"),
         )
-    raise SystemExit(f"❌ Unknown provider: {name} (use: mock | bhavcopy | kite)")
+    raise ValueError(f"❌ Unknown provider: {name} (use: mock | bhavcopy | kite)")
 
 
 def cmd_fetch(args) -> None:
@@ -44,7 +44,7 @@ def cmd_fetch(args) -> None:
     if not candles:
         raise SystemExit(f"❌ No data for {args.exchange}:{args.symbol} from '{args.provider}'")
     store = ParquetStore()
-    store.write_candles(candles)
+    store.write_candles(candles, source=provider.name)
     print(f"✅ [{provider.name}] {args.exchange}:{args.symbol}: {len(candles)} candles fetched & stored")
     print(f"   range: {candles[0].timestamp.date()} → {candles[-1].timestamp.date()}")
     print(f"   last close: ₹{candles[-1].close}")

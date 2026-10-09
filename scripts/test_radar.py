@@ -37,6 +37,7 @@ class RadarTests(unittest.TestCase):
 
     def test_mixed_sessions_excluded_from_breadth(self):
         store = Mock()
+        store.provenance.return_value = {'status': 'unknown', 'sources': []}
         store.list_instruments.return_value = ['NSE_INFY', 'NSE_TCS']
         store.read_candles.side_effect = [candles(), candles('NSE:TCS', -1)]
         data = snapshot(store, datetime(2026, 2, 1))
@@ -47,6 +48,7 @@ class RadarTests(unittest.TestCase):
 
     def test_empty_and_corrupt(self):
         store = Mock()
+        store.provenance.return_value = {'status': 'unknown', 'sources': []}
         store.list_instruments.return_value = ['NSE_BAD']
         store.read_candles.side_effect = OSError('sensitive internal path')
         data = snapshot(store)
