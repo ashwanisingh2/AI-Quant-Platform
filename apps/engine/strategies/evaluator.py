@@ -29,7 +29,7 @@ class StrategyEvaluator:
         qty = self.params.get("quantity", 100)
         self._closes.append(price)
 
-        if self.name == "ema_cross":
+        if self.name in ("ema_cross", "atm_call_buy"):  # atm_call_buy = options buyer (same logic)
             self._ema_fast = ema_update(self._ema_fast, price, self.params.get("fast_ema", 10))
             self._ema_slow = ema_update(self._ema_slow, price, self.params.get("slow_ema", 30))
             if self._ema_fast is None or self._ema_slow is None:

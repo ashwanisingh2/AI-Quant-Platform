@@ -66,9 +66,17 @@ class FyersBroker(BrokerBase):
 
     @staticmethod
     def fyers_symbol(exchange: str, symbol: str) -> str:
-        """Hamara "NSE:SBIN" → Fyers ka "NSE:SBIN-EQ"."""
+        """Hamara symbol → Fyers ka symbol.
+
+        Equity:  "SBIN" → "NSE:SBIN-EQ"
+        F&O:     "NIFTY-23OCT25-FUT" → "NSE:NIFTY25OCTFUT" (no -EQ for derivatives)
+        """
+        from libs.shared.fno import parse_fno_symbol, to_compact_fno
         if exchange not in ("NSE", "BSE"):
             raise ValueError(f"Fyers pe exchange nahi hai: {exchange} (supported: NSE, BSE)")
+        fno = parse_fno_symbol(symbol)
+        if fno is not None:
+            return f"{exchange}:{to_compact_fno(fno)}"
         return f"{exchange}:{symbol}-EQ"
 
     @staticmethod
@@ -125,6 +133,7 @@ class FyersBroker(BrokerBase):
         if self.dry_run:
             return {"instrument": f"{exchange}:{symbol}",
                     "last_price": self._last_price, "source": "dry_run"}
+        exchange, symbol = self.to_broker_instrument(exchange, symbol)
         fsym = self.fyers_symbol(exchange, symbol)
         resp = self._fyers.quotes({"symbols": fsym})
         ltp = None
@@ -153,6 +162,7 @@ class FyersBroker(BrokerBase):
             self._apply_fill(order)
             return order
 
+        exchange, symbol = self.to_broker_instrument(exchange, symbol)
         fsym = self.fyers_symbol(exchange, symbol)
         resp = self._fyers.place_order(data={
             "symbol": fsym,

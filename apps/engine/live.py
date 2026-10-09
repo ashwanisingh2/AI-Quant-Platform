@@ -317,6 +317,7 @@ class LiveTrader:
             current_drawdown_pct=(eq / self._peak_equity - 1) * 100,
             reference_price=price,
             instrument=self.instrument,
+            held_qty=self._held_qty(),   # F&O: exit vs naked short pata chale
         )
         decision = self.risk.check_order(side, int(qty), price, ctx,
                                          strategy=strategy, confidence=confidence)

@@ -31,8 +31,8 @@ class UpstoxBroker(BrokerBase):
     name = "upstox"
     required_env = ("UPSTOX_ACCESS_TOKEN",)
 
-    #: hamara exchange → Upstox ka segment
-    SEGMENTS = {"NSE": "NSE_EQ", "BSE": "BSE_EQ"}
+    #: hamara exchange → Upstox ka segment (equity + F&O)
+    SEGMENTS = {"NSE": "NSE_EQ", "BSE": "BSE_EQ", "NFO": "NFO", "BFO": "BFO"}
     #: hamara product → Upstox ka product code
     PRODUCTS = {"CNC": "D", "MIS": "I"}
     #: Upstox order status (lowercase) → hamara status
@@ -83,6 +83,14 @@ class UpstoxBroker(BrokerBase):
         import upstox_client
         return getattr(upstox_client, name)(self._client)
 
+    def to_broker_instrument(self, exchange: str, symbol: str) -> tuple[str, str]:
+        """F&O: NSE:NIFTY-23OCT25-FUT → NFO:NIFTY25OCTFUT (upstox ka compact format)."""
+        from libs.shared.fno import parse_fno_symbol, to_compact_fno
+        fno = parse_fno_symbol(symbol)
+        if fno is not None:
+            return "NFO", to_compact_fno(fno)
+        return exchange, symbol
+
     # ---------- connection ----------
     def connect(self) -> dict:
         """Connection test + reconciliation (real positions/orders sync — startup pe zaroori)."""
@@ -119,19 +127,22 @@ class UpstoxBroker(BrokerBase):
         """Upstox instrument_key ("NSE_EQ|INE002A01018"). Dry-run: stable fake key."""
         key = (exchange, symbol)
         if key not in self._token_cache:
-            seg = self._segment(exchange)
             if self.dry_run:
+                seg = self._segment(exchange)
                 fake_isin = f"INE{zlib.crc32(f'{exchange}:{symbol}'.encode()) % 10**9:09d}"
                 self._token_cache[key] = f"{seg}|{fake_isin}"
             else:
-                self._token_cache[key] = self._lookup_instrument_key(seg, symbol)
+                bex, bsym = self.to_broker_instrument(exchange, symbol)
+                self._token_cache[key] = self._lookup_instrument_key(self._segment(bex), bsym)
         return self._token_cache[key]
 
     def _lookup_instrument_key(self, segment: str, symbol: str) -> str:
-        """Instruments list se tradingsymbol → instrument_key."""
+        """Instruments list se tradingsymbol → instrument_key (dashes/spaces normalize)."""
+        wanted = symbol.upper().replace("-", "").replace(" ", "")
         instruments = self._api("InstrumentApi").get_instruments(segment, api_version=self.API_VERSION)
         for inst in instruments.data or []:
-            if str(getattr(inst, "trading_symbol", "")).upper() == symbol.upper():
+            tsym = str(getattr(inst, "trading_symbol", "")).upper().replace("-", "").replace(" ", "")
+            if tsym == wanted:
                 return str(getattr(inst, "instrument_key"))
         raise ValueError(f"Instrument nahi mila: {segment}:{symbol} (instrument master mein dhoondo)")
 
@@ -140,6 +151,7 @@ class UpstoxBroker(BrokerBase):
         if self.dry_run:
             return {"instrument": f"{exchange}:{symbol}",
                     "last_price": self._last_price, "source": "dry_run"}
+        exchange, symbol = self.to_broker_instrument(exchange, symbol)
         token = self.resolve_token(exchange, symbol)
         resp = self._api("MarketQuoteApi").get_ltp(
             instrument_key=token, api_version=self.API_VERSION)
@@ -171,6 +183,7 @@ class UpstoxBroker(BrokerBase):
             return order
 
         import upstox_client
+        exchange, symbol = self.to_broker_instrument(exchange, symbol)
         token = self.resolve_token(exchange, symbol)
         body = upstox_client.PlaceOrderV3Request(
             quantity=int(qty),

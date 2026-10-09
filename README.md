@@ -180,7 +180,7 @@ ai-quant-platform/
 ## 🧪 Testing
 
 ```bash
-# Full test suite — Phase 0, 1, 2, 3, 4, 5, 6, 7 (64 tests)
+# Full test suite — Phase 0, 1, 2, 3, 4, 5, 6, 7, 8 (74 tests)
 # API/dashboard tests ke liye servers chalne chahiye (yeh auto-SKIP hote hain agar band hon)
 python -m apps.api.main &          # port 8000
 cd apps/dashboard && npm run dev & # port 5173
@@ -245,6 +245,37 @@ python -m apps.engine.main live --instrument NSE:TESTCO --broker fyers --mode dr
 curl localhost:8000/brokers    # → 4 brokers, creds status ke saath
 ```
 
+## ⚠️ Phase 8 — F&O (Futures & Options) Support
+
+> ⚠️ **F&O = leverage = high risk.** Neeche wali safety rules hamesha lagti hain.
+
+**Symbol format (canonical):**
+```
+NSE:NIFTY-23OCT25-FUT          # future
+NSE:NIFTY-23OCT25-24000-CE     # call option
+NSE:NIFTY-23OCT25-24000-PE     # put option
+```
+
+**Kya mila:**
+- **`libs/shared/fno.py`** — symbol parse/format, lot sizes (NIFTY 75, BANKNIFTY 35, FINNIFTY 65...), `atm_strike`, monthly expiry (last Thursday), compact broker format (`NIFTY25OCTFUT`)
+- **Risk engine +3 F&O checks** — `fno_lot_size` (qty lot ka multiple) · `fno_notional_cap` (default 100% of capital) · `no_naked_option_sell` (**MVP mein naked option selling nahi** — sirf buy/long-exit). Equity position cap F&O pe nahi lagta (apna notional cap hai).
+- **All 4 brokers** — F&O symbol mapping per broker (Kite/Upstox: `NFO:NIFTY25OCTFUT` · Dhan: `NSE_FNO` segment + security_id · Fyers: `NSE:NIFTY25OCTFUT`)
+- **Mock F&O data** — synthetic futures/options candles + `get_option_chain()` (21 strikes, CE/PE premiums)
+- **`atm_call_buy` strategy** — options BUY only (EMA cross on premium, long exit). Naked selling nahi karti.
+- **Nautilus instruments** — `FuturesContract`/`OptionContract` with real lot sizes (backtest = signal validation; CASH account full notional debit karta hai, toh capital ≥ 1 lot notional rakho — NIFTY ≈ ₹18L at 24000)
+
+```bash
+# F&O data fetch + backtest (mock se synthetic data)
+python -m apps.data_gateway.main fetch --provider mock --symbol NIFTY-23OCT25-FUT --days 90
+python -m apps.engine.main backtest --instrument NSE:NIFTY-23OCT25-FUT --strategy ema_cross --capital 5000000
+
+# Option chain dekho
+python -c "from apps.data_gateway.providers.mock_provider import MockProvider; print(MockProvider().get_option_chain('NIFTY', spot=24000.0))"
+
+# F&O paper/live dry-run (lot size enforce hoga)
+python -m apps.engine.main live --instrument NSE:NIFTY-23OCT25-FUT --strategy ema_cross --mode dry_run
+```
+
 ## 🗺️ Roadmap
 
 - [x] **Phase 0** — Data foundation (fetch → store → query)
@@ -254,8 +285,9 @@ curl localhost:8000/brokers    # → 4 brokers, creds status ke saath
 - [x] **Phase 4** — Risk engine hardening + live trading (Kite, gated, dry-run default)
 - [x] **Phase 5** — OSS release (packaging, Docker, CI, community, docs)
 - [x] **Phase 6** — Multi-broker abstraction + Dhan + Live dashboard
-- [x] **Phase 7** — 4 brokers: Kite + Dhan + Upstox + Fyers ← *abhi yahin hain*
-- [ ] **Phase 8** — F&O support, mobile app, hosted SaaS
+- [x] **Phase 7** — 4 brokers: Kite + Dhan + Upstox + Fyers
+- [x] **Phase 8** — F&O support (symbols, lots, risk checks, options-buyer strategy) ← *abhi yahin hain*
+- [ ] **Phase 9** — Mobile app, hosted SaaS, margin-based F&O accounting
 
 ## 📚 Design Docs
 

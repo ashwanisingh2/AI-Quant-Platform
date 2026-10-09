@@ -107,4 +107,19 @@ Har order ka **audit trail** banta hai — kaunsa check pass/fail hua, sab recor
 
 ---
 
+## 🚨 F&O (Futures & Options) — EXTRA DANGER ZONE
+
+F&O mein **leverage** hota hai — chhota movement bada loss de sakta hai. Neeche wali rules hamesha lagti hain:
+
+- [ ] **Lot size enforce hota hai** — qty hamesha lot size ka multiple (NIFTY 75, BANKNIFTY 35...). Galat qty → order reject.
+- [ ] **F&O notional cap** — default 100% of capital. 1 lot NIFTY future ≈ ₹18 lakh notional (at 24000) — woh bhi sirf margin (₹3.6L) se chalega, par loss **poore notional** pe lag sakta hai.
+- [ ] **Naked option SELL allowed nahi hai** (MVP). Sirf option BUY / long exit. Isse aapka max loss premium tak limited rehta hai (buyer side).
+- [ ] **Options expiry yaad rakho** — Thursday ko expire hote hain. Time decay (theta) aapke khilaf kaam karta hai.
+- [ ] **F&O backtest = signal validation** — Nautilus CASH account full notional debit karta hai; margin-based accounting abhi nahi hai. Real sizing risk engine karta hai.
+- [ ] **Pehle futures mein haath gande karo** (paper), phir options. Options ki greeks (delta/theta/vega) samajh ke hi trade karo.
+
+> 🚨 **Sabse bada rule:** F&O mein woh paisa lagao jo **poora kho sakte ho**. Kabhi bhi emergency fund ya loan ka paisa F&O mein nahi.
+
+---
+
 > 🚨 **Yaad rakho:** Stock market mein paisa banana mushkil hai, aur **jaldi kho dena aasaan**. Ye platform tools hain — zimmedari teri hai. Ye financial advice nahi hai.

@@ -31,8 +31,8 @@ class DhanBroker(BrokerBase):
     name = "dhan"
     required_env = ("DHAN_CLIENT_ID",)
 
-    #: hamara exchange → Dhan ka exchange segment (equity cash)
-    SEGMENTS = {"NSE": "NSE_EQ", "BSE": "BSE_EQ"}
+    #: hamara exchange → Dhan ka exchange segment (equity cash + F&O)
+    SEGMENTS = {"NSE": "NSE_EQ", "BSE": "BSE_EQ", "NFO": "NSE_FNO", "BFO": "BSE_FNO"}
     #: hamara product → Dhan ka product type
     PRODUCTS = {"CNC": "CNC", "MIS": "INTRA"}
     #: Dhan order status → hamara status
@@ -70,6 +70,13 @@ class DhanBroker(BrokerBase):
         if p is None:
             raise ValueError(f"Dhan pe product nahi hai: {product} (supported: {sorted(self.PRODUCTS)})")
         return p
+
+    def to_broker_instrument(self, exchange: str, symbol: str) -> tuple[str, str]:
+        """F&O: NSE:NIFTY-23OCT25-FUT → NFO:NIFTY-23OCT25-FUT (Dhan segment NSE_FNO)."""
+        from libs.shared.fno import is_fno
+        if is_fno(symbol):
+            return "NFO", symbol
+        return exchange, symbol
 
     # ---------- connection ----------
     def connect(self) -> dict:
@@ -122,7 +129,8 @@ class DhanBroker(BrokerBase):
             if self.dry_run:
                 self._token_cache[key] = str(zlib.crc32(f"{exchange}:{symbol}".encode()) % 900_000 + 100_000)
             else:
-                self._token_cache[key] = self._lookup_security_id(exchange, symbol)
+                bex, bsym = self.to_broker_instrument(exchange, symbol)
+                self._token_cache[key] = self._lookup_security_id(bex, bsym)
         return self._token_cache[key]
 
     def _lookup_security_id(self, exchange: str, symbol: str) -> str:
@@ -134,6 +142,7 @@ class DhanBroker(BrokerBase):
         if self.dry_run:
             return {"instrument": f"{exchange}:{symbol}",
                     "last_price": self._last_price, "source": "dry_run"}
+        exchange, symbol = self.to_broker_instrument(exchange, symbol)
         seg = self._segment(exchange)
         token = self.resolve_token(exchange, symbol)
         df = self._dhan.ticker_data(securities={seg: [int(token)]})
@@ -163,6 +172,7 @@ class DhanBroker(BrokerBase):
             self._apply_fill(order)
             return order
 
+        exchange, symbol = self.to_broker_instrument(exchange, symbol)
         seg = self._segment(exchange)
         token = self.resolve_token(exchange, symbol)
         resp = self._dhan.place_order(
@@ -292,14 +302,16 @@ def resolve_security_id(dhan, exchange: str, symbol: str) -> str:
     id_cols = ["EXCH_ID", "SEM_EXM_EXCH_ID", "SECURITY_ID"]
     sym_cols = ["SEM_TRADING_SYMBOL", "SM_SYMBOL_NAME", "SYMBOL_NAME", "INSTRUMENT"]
     seg_cols = ["SEM_SEGMENT", "SEGMENT"]
+    wanted = symbol.upper().replace("-", "").replace(" ", "")
     for row in rows:
         sym = next((str(row[c]) for c in sym_cols if row.get(c)), "")
         exid = next((row[c] for c in id_cols if row.get(c) is not None), None)
         segment = next((str(row[c]) for c in seg_cols if row.get(c)), "")
-        # equity segment 'E' hai
+        # equity segment 'E' hai; F&O 'F'/'D' — match normalize karke (dashes/spaces hata ke)
+        sym_norm = sym.upper().replace("-", "").replace(" ", "")
         is_equity = segment in ("E", "EQ", "EQUITY")
         exch = str(row.get("SEM_EXM_EXCH_ID") or row.get("EXCH") or "")
-        if sym.upper() == symbol.upper() and exid is not None and (is_equity or not segment):
+        if sym_norm == wanted and exid is not None and (is_equity or not segment or segment in ("F", "D")):
             if exchange == "NSE" and exch and "BSE" in exch.upper():
                 continue
             return str(exid)

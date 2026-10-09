@@ -1,4 +1,4 @@
-"""Full test suite — Phase 0, 1, 2, 3, 4, 5, 6, 7.
+"""Full test suite — Phase 0, 1, 2, 3, 4, 5, 6, 7, 8.
 
 Run:  python scripts/test_all.py
 
@@ -923,6 +923,235 @@ check("packaging: upstox/fyers extras + .env.example", t_p7_pyproject_extras)
 check("dashboard: Live page fetches brokers dynamically", t_p7_live_page_dynamic_brokers)
 
 # ============================================================
+print("\n⚠️ PHASE 8 — F&O (Futures & Options) Support")
+# ============================================================
+
+def t_p8_fno_symbol_parse():
+    from libs.shared.fno import (
+        atm_strike,
+        format_fno_symbol,
+        is_fno,
+        lot_size,
+        monthly_expiry,
+        parse_fno_symbol,
+        underlying_of,
+    )
+    f = parse_fno_symbol("NIFTY-23OCT25-FUT")
+    assert f.underlying == "NIFTY" and f.is_future and f.expiry.month == 10
+    o = parse_fno_symbol("NIFTY-23OCT25-24000-CE")
+    assert o.is_option and o.strike == 24000 and o.kind == "CE"
+    p = parse_fno_symbol("banknifty-30OCT25-52000-PE")  # case-insensitive
+    assert p.underlying == "BANKNIFTY" and p.kind == "PE"
+    assert format_fno_symbol(f) == "NIFTY-23OCT25-FUT"
+    assert format_fno_symbol(o) == "NIFTY-23OCT25-24000-CE"
+    assert is_fno("TESTCO") is False and is_fno("NIFTY-23OCT25-FUT") is True
+    assert underlying_of("NIFTY-23OCT25-24000-CE") == "NIFTY"
+    assert underlying_of("TESTCO") is None
+    assert lot_size("NIFTY") == 75 and lot_size("BANKNIFTY") == 35
+    assert lot_size("UNKNOWNSTOCK") == 1  # conservative default
+    assert atm_strike([23900, 23950, 24000, 24050], 24020) == 24000
+    exp = monthly_expiry(2026, 10)
+    assert exp.month == 10 and exp.weekday() == 3  # last Thursday
+
+
+def _fno_ctx(**kw):
+    from datetime import datetime, timedelta, timezone
+
+    from libs.risk.engine import RiskContext
+    IST = timezone(timedelta(hours=5, minutes=30))
+    base = dict(capital=1_000_000, cash=1_000_000, positions_value=0.0,
+                open_positions=0, daily_pnl_pct=0.0, current_drawdown_pct=0.0,
+                reference_price=24000.0, instrument="NSE:NIFTY-23OCT25-FUT",
+                now=datetime(2026, 10, 12, 10, 0, tzinfo=IST))
+    base.update(kw)
+    return RiskContext(**base)
+
+
+def t_p8_risk_fno_checks():
+    from libs.risk.engine import RiskEngine, RiskLimits
+    eng = RiskEngine(RiskLimits(trading_hours_only=False))
+    # lot size: 100 not multiple of 75 → reject
+    d = eng.check_order("BUY", 100, 24000.0, _fno_ctx())
+    assert not d.allowed and "lot" in d.reason.lower(), d.reason
+    # notional cap: 75 × 24000 = 1.8M > 1M capital → reject
+    d = eng.check_order("BUY", 75, 24000.0, _fno_ctx())
+    assert not d.allowed and "notional" in d.reason.lower(), d.reason
+    # OK case: 75 × 13000 = 975k ≤ 1M
+    d = eng.check_order("BUY", 75, 13000.0, _fno_ctx(reference_price=13000.0))
+    assert d.allowed, d.reason
+    # naked option SELL (held 0) → blocked
+    octx = _fno_ctx(instrument="NSE:NIFTY-23OCT25-24000-CE", reference_price=300.0)
+    d = eng.check_order("SELL", 75, 300.0, octx)
+    assert not d.allowed and "naked" in d.reason.lower(), d.reason
+    # long exit (held 75) → allowed
+    d = eng.check_order("SELL", 75, 300.0, _fno_ctx(
+        instrument="NSE:NIFTY-23OCT25-24000-CE", reference_price=300.0, held_qty=75))
+    assert d.allowed, d.reason
+    # option BUY → allowed
+    assert eng.check_order("BUY", 75, 300.0, octx).allowed
+    # override flag
+    eng2 = RiskEngine(RiskLimits(trading_hours_only=False, allow_naked_option_sell=True))
+    assert eng2.check_order("SELL", 75, 300.0, octx).allowed
+    # equity regression: TESTCO abhi bhi 200k cap pe
+    ectx = _fno_ctx(instrument="NSE:TESTCO", reference_price=1000.0)
+    assert not eng.check_order("BUY", 300, 1000.0, ectx).allowed
+    assert eng.check_order("BUY", 100, 1000.0, ectx).allowed
+
+
+def t_p8_mock_fno_data():
+    from apps.data_gateway.providers.mock_provider import MockProvider
+    mp = MockProvider()
+    fut = mp.get_historical("NIFTY-23OCT25-FUT", days=40)
+    assert len(fut) == 40 and fut[0].instrument == "NSE:NIFTY-23OCT25-FUT"
+    ce = mp.get_historical("NIFTY-23OCT25-24000-CE", days=40)
+    assert len(ce) == 40 and ce[0].instrument == "NSE:NIFTY-23OCT25-24000-CE"
+    assert all(c.low > 0 and c.close > 0 for c in ce), "option premium positive hona chahiye"
+    # deterministic
+    again = mp.get_historical("NIFTY-23OCT25-FUT", days=40)
+    assert [c.close for c in again] == [c.close for c in fut]
+    # equity abhi bhi chal raha hai
+    assert len(mp.get_historical("TESTCO", days=10)) == 10
+    # option chain: 21 strikes, ATM premiums positive
+    chain = mp.get_option_chain("NIFTY", spot=24000.0)
+    assert len(chain) == 21
+    atm = next(r for r in chain if r["strike"] == 24000.0)
+    assert atm["ce"]["symbol"].endswith("-CE") and atm["pe"]["symbol"].endswith("-PE")
+    assert atm["ce"]["premium"] > 0 and atm["pe"]["premium"] > 0
+    # ITM CE intrinsic > OTM CE
+    itm = next(r for r in chain if r["strike"] == 23500.0)
+    assert itm["ce"]["premium"] > atm["ce"]["premium"]
+
+
+def t_p8_backtest_fno():
+    from apps.data_gateway.providers.mock_provider import MockProvider
+    from apps.engine.runner import run_backtest
+    from libs.storage.parquet_store import ParquetStore
+    store = ParquetStore()
+    store.write_candles(MockProvider().get_historical("NIFTY-23OCT25-FUT", days=90))
+    store.write_candles(MockProvider().get_historical("NIFTY-23OCT25-24000-CE", days=90))
+    # capital lot notional se zyada (CASH account full notional debit karta hai)
+    r = run_backtest("NSE:NIFTY-23OCT25-FUT", "ema_cross",
+                     {"fast_ema": 5, "slow_ema": 20, "quantity": 75}, None, None, 5_000_000)
+    assert r["n_trades"] > 0, f"FUT backtest no trades: {r}"
+    assert r["instrument"] == "NSE:NIFTY-23OCT25-FUT"
+    r2 = run_backtest("NSE:NIFTY-23OCT25-24000-CE", "atm_call_buy",
+                      {"fast_ema": 5, "slow_ema": 20, "quantity": 75}, None, None, 5_000_000)
+    assert r2["n_trades"] > 0, f"CE backtest no trades: {r2}"
+    assert r2["strategy"] == "atm_call_buy"
+
+
+def t_p8_broker_fno_mapping():
+    from apps.engine.brokers import get_broker
+    # har broker ka F&O symbol mapping
+    kite = get_broker("kite", dry_run=True)
+    assert kite.to_broker_instrument("NSE", "NIFTY-23OCT25-FUT") == ("NFO", "NIFTY25OCTFUT")
+    assert kite.to_broker_instrument("NSE", "NIFTY-23OCT25-24000-CE") == ("NFO", "NIFTY25OCT24000CE")
+    assert kite.to_broker_instrument("NSE", "TESTCO") == ("NSE", "TESTCO")  # equity passthrough
+    dhan = get_broker("dhan", dry_run=True)
+    assert dhan.to_broker_instrument("NSE", "NIFTY-23OCT25-FUT") == ("NFO", "NIFTY-23OCT25-FUT")
+    assert dhan._segment("NFO") == "NSE_FNO"
+    upstox = get_broker("upstox", dry_run=True)
+    assert upstox.to_broker_instrument("NSE", "NIFTY-23OCT25-FUT") == ("NFO", "NIFTY25OCTFUT")
+    assert upstox._segment("NFO") == "NFO"
+    fyers = get_broker("fyers", dry_run=True)
+    assert fyers.to_broker_instrument("NSE", "NIFTY-23OCT25-FUT") == ("NSE", "NIFTY-23OCT25-FUT")  # passthrough
+    assert fyers.fyers_symbol("NSE", "NIFTY-23OCT25-FUT") == "NSE:NIFTY25OCTFUT"  # compact, no -EQ
+    assert fyers.fyers_symbol("NSE", "NIFTY-23OCT25-24000-CE") == "NSE:NIFTY25OCT24000CE"
+    assert fyers.fyers_symbol("NSE", "SBIN") == "NSE:SBIN-EQ"  # equity unchanged
+    # dry-run order F&O instrument pe (original symbol rakhta hai)
+    kite.set_price(24000.0)
+    o = kite.place_market_order("NSE", "NIFTY-23OCT25-FUT", "BUY", 75)
+    assert o["status"] == "COMPLETE" and o["symbol"] == "NIFTY-23OCT25-FUT"
+    pos = {p["symbol"]: p for p in kite.positions()}
+    assert pos["NIFTY-23OCT25-FUT"]["qty"] == 75
+
+
+def t_p8_instruments_fno():
+    from nautilus_trader.model.instruments import Equity, FuturesContract, OptionContract
+
+    from apps.engine.data_loader import build_instrument
+    assert isinstance(build_instrument("NSE:TESTCO"), Equity)
+    fut = build_instrument("NSE:NIFTY-23OCT25-FUT")
+    assert isinstance(fut, FuturesContract) and int(fut.lot_size) == 75
+    assert isinstance(build_instrument("NSE:NIFTY-23OCT25-24000-CE"), OptionContract)
+    pe = build_instrument("NSE:BANKNIFTY-30OCT25-52000-PE")
+    assert isinstance(pe, OptionContract) and int(pe.lot_size) == 35
+
+
+def t_p8_evaluator_atm_call_buy():
+    from apps.engine.strategies.evaluator import StrategyEvaluator
+    ev = StrategyEvaluator("atm_call_buy", {"fast_ema": 3, "slow_ema": 6, "quantity": 75})
+    for _ in range(8):
+        assert ev.on_price(100.0, 0) is None
+    sig = ev.on_price(120.0, 0)  # premium jump → cross up → BUY (option buyer)
+    assert sig and sig["side"] == "BUY" and sig["qty"] == 75, sig
+    sig2 = None
+    for p in [110.0, 100.0, 95.0, 90.0, 85.0, 80.0]:
+        sig2 = ev.on_price(p, 75) or sig2
+    assert sig2 and sig2["side"] == "SELL" and sig2["qty"] == 75, sig2  # long exit
+
+
+def t_p8_live_fno_lot_enforcement():
+    import asyncio
+
+    from apps.engine.brokers import get_broker
+    from apps.engine.live import LiveTrader, ReplayPriceSource
+    from libs.risk.engine import RiskEngine, RiskLimits
+
+    async def run():
+        # qty 100 (lot 75 ka multiple nahi) → saare BUY reject
+        broker = get_broker("kite", dry_run=True)
+        events = []
+        t = LiveTrader("NSE:NIFTY-23OCT25-FUT", "ema_cross",
+                       {"fast_ema": 3, "slow_ema": 6, "quantity": 100},
+                       broker=broker,
+                       risk_engine=RiskEngine(RiskLimits(trading_hours_only=False)),
+                       price_source=ReplayPriceSource("NSE:NIFTY-23OCT25-FUT", speed=0, limit=40),
+                       on_event=lambda e: events.append(e), capital=5_000_000)
+        await t.start()
+        await asyncio.wait_for(t._task, timeout=30)
+        await asyncio.sleep(0.2)
+        assert len(broker.all_orders()) == 0, "lot size enforce nahi hua"
+        lot_rej = [e for e in events if e["type"] == "live.rejected" and "lot" in e["reason"].lower()]
+        assert lot_rej, "lot rejection event nahi mila"
+        # qty 75 (lot multiple) → orders hote hain
+        broker2 = get_broker("kite", dry_run=True)
+        t2 = LiveTrader("NSE:NIFTY-23OCT25-FUT", "ema_cross",
+                        {"fast_ema": 10, "slow_ema": 30, "quantity": 75},
+                        broker=broker2,
+                        risk_engine=RiskEngine(RiskLimits(trading_hours_only=False)),
+                        price_source=ReplayPriceSource("NSE:NIFTY-23OCT25-FUT", speed=0, limit=80),
+                        capital=2_000_000)
+        await t2.start()
+        await asyncio.wait_for(t2._task, timeout=30)
+        assert len(broker2.all_orders()) >= 1, "valid lot pe order nahi hua"
+
+    asyncio.run(run())
+
+
+def t_p8_cli_fetch_fno():
+    r = subprocess.run([sys.executable, "-m", "apps.data_gateway.main", "fetch",
+                        "--provider", "mock", "--symbol", "NIFTY-23OCT25-FUT", "--days", "40"],
+                       capture_output=True, text=True, cwd=ROOT, timeout=60)
+    assert r.returncode == 0, f"F&O fetch failed: {r.stderr[-300:]}"
+    assert "NIFTY-23OCT25-FUT" in r.stdout
+    # strategies list mein atm_call_buy hai
+    r2 = subprocess.run([sys.executable, "-m", "apps.engine.main", "strategies"],
+                        capture_output=True, text=True, cwd=ROOT, timeout=30)
+    assert "atm_call_buy" in r2.stdout
+
+
+check("fno: symbol parse/format/lots/expiry", t_p8_fno_symbol_parse)
+check("risk: F&O checks (lot, notional, naked sell)", t_p8_risk_fno_checks)
+check("mock: F&O data + option chain", t_p8_mock_fno_data)
+check("backtest: F&O future + atm_call_buy", t_p8_backtest_fno)
+check("brokers: F&O symbol mapping (4 brokers)", t_p8_broker_fno_mapping)
+check("instruments: FuturesContract/OptionContract", t_p8_instruments_fno)
+check("evaluator: atm_call_buy BUY→exit", t_p8_evaluator_atm_call_buy)
+check("live: F&O lot size enforcement", t_p8_live_fno_lot_enforcement)
+check("CLI: fetch F&O + strategies list", t_p8_cli_fetch_fno)
+
+# ============================================================
 print("\n🌐 PHASE 3 — API + Dashboard (live servers)")
 # ============================================================
 
@@ -957,7 +1186,8 @@ if not api_up():
                  "API brokers list (kite + dhan)",
                  "API live dhan dry-run + invalid broker gate",
                  "API brokers list (4 brokers)",
-                 "API live fyers dry-run + broker gate"]:
+                 "API live fyers dry-run + broker gate",
+                 "API F&O flow (fetch + paper + kill)"]:
         skip(name, "API server nahi chal raha (python -m apps.api.main)")
 else:
     def t_api_health():
@@ -1188,6 +1418,33 @@ else:
 
     check("API brokers list (4 brokers)", t_api_brokers_four)
     check("API live fyers dry-run + broker gate", t_api_live_fyers_dry_run)
+
+    def t_api_fno_flow():
+        # F&O data fetch via API (mock provider synthesizes)
+        r = http_post(API + "/data/fetch", {"provider": "mock",
+                                            "symbol": "NIFTY-23OCT25-FUT", "days": 60})
+        assert r["instrument"] == "NSE:NIFTY-23OCT25-FUT" and r["candles"] == 60, r
+        # instrument list mein dikhe
+        insts = {i["instrument"] for i in http_get(API + "/instruments")["instruments"]}
+        assert "NSE:NIFTY-23OCT25-FUT" in insts
+        # paper trading F&O instrument pe (capital lot notional se zyada)
+        http_post(API + "/paper/start", {"instrument": "NSE:NIFTY-23OCT25-FUT",
+                                         "strategy": "ema_cross",
+                                         "params": {"quantity": 75},
+                                         "capital": 5_000_000, "speed": 0.05, "limit": 60})
+        time.sleep(2)
+        p = http_get(API + "/portfolio")
+        assert p["running"] is True, "F&O paper not running"
+        assert p["instrument"] == "NSE:NIFTY-23OCT25-FUT"
+        assert len(p["equity_curve"]) > 0
+        # strategies list mein atm_call_buy
+        s = http_get(API + "/strategies")["strategies"]
+        assert "atm_call_buy" in s
+        http_post(API + "/kill-switch")
+        time.sleep(0.5)
+        assert http_get(API + "/portfolio")["killed"] is True
+
+    check("API F&O flow (fetch + paper + kill)", t_api_fno_flow)
 
 # ============================================================
 # SUMMARY

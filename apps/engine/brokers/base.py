@@ -42,6 +42,15 @@ class BrokerBase(ABC):
         """Connection test + reconciliation (startup pe real state sync)."""
 
     # ---------- instruments / pricing ----------
+    def to_broker_instrument(self, exchange: str, symbol: str) -> tuple[str, str]:
+        """Broker-specific exchange/symbol mapping.
+
+        F&O formats har broker mein alag hote hain (kite: NFO:NIFTY25OCTFUT,
+        fyers: NSE:NIFTY25OCTFUT...). Default: passthrough.
+        Sirf LIVE paths mein use hota hai — dry-run original symbol rakhta hai.
+        """
+        return exchange, symbol
+
     @abstractmethod
     def resolve_token(self, exchange: str, symbol: str):
         """Broker ka internal instrument id (kite: int token, dhan: security_id)."""

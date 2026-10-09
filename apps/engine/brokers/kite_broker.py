@@ -69,18 +69,27 @@ class KiteBroker(BrokerBase):
                 self._orders[o["order_id"]] = self._to_local_order(o)
 
     # ---------- instruments ----------
+    def to_broker_instrument(self, exchange: str, symbol: str) -> tuple[str, str]:
+        """F&O: NSE:NIFTY-23OCT25-FUT → NFO:NIFTY25OCTFUT (kite ka compact format)."""
+        from libs.shared.fno import parse_fno_symbol, to_compact_fno
+        fno = parse_fno_symbol(symbol)
+        if fno is not None:
+            return "NFO", to_compact_fno(fno)
+        return exchange, symbol
+
     def resolve_token(self, exchange: str, symbol: str) -> int:
         key = (exchange, symbol)
         if key not in self._token_cache:
             if self.dry_run:
                 self._token_cache[key] = zlib.crc32(f"{exchange}:{symbol}".encode()) % 900_000 + 100_000
             else:
-                for inst in self._kite.instruments(exchange):
-                    if inst.get("tradingsymbol") == symbol:
+                bex, bsym = self.to_broker_instrument(exchange, symbol)
+                for inst in self._kite.instruments(bex):
+                    if inst.get("tradingsymbol") == bsym:
                         self._token_cache[key] = inst["instrument_token"]
                         break
                 else:
-                    raise ValueError(f"Instrument nahi mila: {exchange}:{symbol}")
+                    raise ValueError(f"Instrument nahi mila: {bex}:{bsym}")
         return self._token_cache[key]
 
     # ---------- pricing ----------
@@ -88,6 +97,7 @@ class KiteBroker(BrokerBase):
         if self.dry_run:
             return {"instrument": f"{exchange}:{symbol}",
                     "last_price": self._last_price, "source": "dry_run"}
+        exchange, symbol = self.to_broker_instrument(exchange, symbol)
         data = self._kite.quote(f"{exchange}:{symbol}")[f"{exchange}:{symbol}"]
         return {"instrument": f"{exchange}:{symbol}", "last_price": data["last_price"],
                 "ohlc": data.get("ohlc"), "source": "kite"}
@@ -111,6 +121,7 @@ class KiteBroker(BrokerBase):
             self._apply_fill(order)
             return order
 
+        exchange, symbol = self.to_broker_instrument(exchange, symbol)
         resp = self._kite.place_order(
             variety="regular", exchange=exchange, tradingsymbol=symbol,
             transaction_type=side, quantity=qty, product=product, order_type="MARKET",

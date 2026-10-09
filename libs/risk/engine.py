@@ -31,6 +31,10 @@ class RiskLimits:
     trading_hours_only: bool = True
     market_open: str = "09:15"
     market_close: str = "15:30"
+    # ---------- F&O (Phase 8) ----------
+    enforce_lot_size: bool = True           # F&O qty lot size ka multiple hona chahiye
+    max_fno_notional_pct: float = 100.0     # F&O notional: max % of capital (leverage control)
+    allow_naked_option_sell: bool = False   # MVP: naked option SELL nahi (sirf buy/exit)
 
 
 @dataclass
@@ -43,6 +47,7 @@ class RiskContext:
     current_drawdown_pct: float
     reference_price: float
     instrument: str
+    held_qty: int = 0               # is instrument mein current holding (F&O exit vs naked short)
     now: datetime | None = None     # IST; None → abhi
 
 
@@ -116,13 +121,18 @@ class RiskEngine:
                 return self._deny(f"Price deviation zyada hai: {dev:.2f}%", checks)
 
         # 6. position value cap (pct of capital + absolute)
-        new_value = qty * price if side == "BUY" else 0.0
-        total_value = ctx.positions_value + new_value
-        ok = (total_value <= ctx.capital * self.limits.max_position_pct
-              and total_value <= self.limits.max_position_value)
-        if not add("position_value_cap", ok,
-                   f"₹{total_value:,.0f} (max {self.limits.max_position_pct * 100:.0f}% / ₹{self.limits.max_position_value:,.0f})"):
-            return self._deny("Position size limit cross ho gaya", checks)
+        # F&O instruments pe yeh cap nahi — unka apna notional cap hai (check 9b)
+        from libs.shared.fno import lot_size, parse_fno_symbol
+        sym = ctx.instrument.partition(":")[2] or ctx.instrument
+        fno = parse_fno_symbol(sym)
+        if fno is None:
+            new_value = qty * price if side == "BUY" else 0.0
+            total_value = ctx.positions_value + new_value
+            ok = (total_value <= ctx.capital * self.limits.max_position_pct
+                  and total_value <= self.limits.max_position_value)
+            if not add("position_value_cap", ok,
+                       f"₹{total_value:,.0f} (max {self.limits.max_position_pct * 100:.0f}% / ₹{self.limits.max_position_value:,.0f})"):
+                return self._deny("Position size limit cross ho gaya", checks)
 
         # 7. max open positions (nayi position ke liye)
         if side == "BUY" and ctx.open_positions >= self.limits.max_open_positions:
@@ -144,6 +154,32 @@ class RiskEngine:
                 return self._deny("Max drawdown hit — kill switch territory", checks)
         else:
             add("max_drawdown", True, f"{ctx.current_drawdown_pct:.2f}%")
+
+        # 9a-c. F&O specific checks (sirf F&O instruments pe)
+        if fno is not None:
+            # 9a. lot size — F&O qty lot ka multiple hona chahiye
+            if self.limits.enforce_lot_size:
+                lot = lot_size(fno.underlying)
+                ok = int(qty) % lot == 0
+                if not add("fno_lot_size", ok,
+                           f"qty {qty} · lot {lot} — {'multiple hai' if ok else 'GALAT hai'}"):
+                    return self._deny(f"F&O lot size galat hai: {qty} (lot size {lot})", checks)
+            # 9b. F&O notional cap — leverage control
+            if side == "BUY":
+                notional = qty * price
+                cap = ctx.capital * self.limits.max_fno_notional_pct / 100
+                ok = notional <= cap
+                if not add("fno_notional_cap", ok,
+                           f"₹{notional:,.0f} (max {self.limits.max_fno_notional_pct:.0f}% of capital)"):
+                    return self._deny(
+                        f"F&O notional zyada hai: ₹{notional:,.0f} (max ₹{cap:,.0f})", checks)
+            # 9c. naked option sell — MVP mein allowed nahi (long exit allowed hai)
+            if fno.is_option and side == "SELL" and not self.limits.allow_naked_option_sell:
+                ok = ctx.held_qty > 0
+                if not add("no_naked_option_sell", ok,
+                           "long exit (close)" if ok else "NAKED SHORT — blocked"):
+                    return self._deny(
+                        "MVP: naked option selling allowed nahi hai (sirf buy / long exit)", checks)
 
         # 10. AI confidence (agar diya ho)
         if confidence is not None:
