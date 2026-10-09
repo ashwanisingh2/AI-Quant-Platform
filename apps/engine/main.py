@@ -119,9 +119,11 @@ def cmd_live(args) -> None:
     from apps.engine.brokers import available_brokers, get_broker
     from apps.engine.live import (
         DhanQuotePriceSource,
+        FyersQuotePriceSource,
         KiteQuotePriceSource,
         LiveTrader,
         ReplayPriceSource,
+        UpstoxQuotePriceSource,
     )
     from libs.risk.engine import RiskEngine
 
@@ -166,6 +168,19 @@ def cmd_live(args) -> None:
                 source = DhanQuotePriceSource(exchange, symbol,
                                               client_id=kwargs["client_id"],
                                               access_token=kwargs["access_token"])
+        elif args.broker == "upstox":
+            kwargs = {"api_key": os.environ.get("UPSTOX_API_KEY"),
+                      "access_token": os.environ.get("UPSTOX_ACCESS_TOKEN")}
+            if creds_present:
+                source = UpstoxQuotePriceSource(exchange, symbol,
+                                                access_token=kwargs["access_token"])
+        elif args.broker == "fyers":
+            kwargs = {"client_id": os.environ.get("FYERS_CLIENT_ID"),
+                      "access_token": os.environ.get("FYERS_ACCESS_TOKEN")}
+            if creds_present:
+                source = FyersQuotePriceSource(exchange, symbol,
+                                               client_id=kwargs["client_id"],
+                                               access_token=kwargs["access_token"])
         if source is None:
             source = ReplayPriceSource(args.instrument, speed=args.speed, limit=args.limit)
         broker = get_broker(args.broker, dry_run=(args.mode == "dry_run"), **kwargs)
@@ -216,7 +231,8 @@ def main() -> None:
     lv.add_argument("--instrument", required=True)
     lv.add_argument("--strategy", default="ema_cross", choices=list(STRATEGIES.keys()))
     lv.add_argument("--mode", choices=["dry_run", "live"], default="dry_run")
-    lv.add_argument("--broker", default="kite", help="kite (Zerodha) ya dhan")
+    lv.add_argument("--broker", default="kite",
+                    help="kite (Zerodha) | dhan | upstox | fyers")
     lv.add_argument("--capital", type=float, default=1_000_000)
     lv.add_argument("--product", default="CNC", choices=["CNC", "MIS"], help="CNC=delivery (no leverage) — safe default")
     lv.add_argument("--speed", type=float, default=1.0, help="replay source speed (dry_run without kite creds)")

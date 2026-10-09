@@ -116,6 +116,74 @@ class DhanQuotePriceSource:
         return None
 
 
+class UpstoxQuotePriceSource:
+    """Upstox se live LTP poll karta hai (upstox_client MarketQuoteApi)."""
+
+    def __init__(self, exchange: str, symbol: str, access_token: str | None = None,
+                 poll_interval: float = 2.0):
+        self.exchange = exchange
+        self.symbol = symbol
+        self.poll_interval = poll_interval
+        self.last_error: str | None = None
+        self._api = None
+        self._token: str | None = None
+        if access_token:
+            import upstox_client  # lazy — optional dependency
+            configuration = upstox_client.Configuration()
+            configuration.access_token = access_token
+            self._api = upstox_client.MarketQuoteApi(upstox_client.ApiClient(configuration))
+
+    async def get_price(self) -> tuple[float, str] | None:
+        if self._api is None:
+            return None
+        try:
+            if self._token is None:
+                seg = {"NSE": "NSE_EQ", "BSE": "BSE_EQ"}.get(self.exchange, "NSE_EQ")
+                self._token = f"{seg}|{self.symbol}"
+            resp = await asyncio.to_thread(
+                self._api.get_ltp, instrument_key=self._token, api_version="2.0")
+            data = getattr(resp, "data", None)
+            if isinstance(data, dict) and data:
+                row = data.get(self._token) or next(iter(data.values()))
+                lp = row.get("last_price") or row.get("lastPrice") if isinstance(row, dict) else None
+                if lp:
+                    return float(lp), datetime.now(timezone.utc).isoformat()
+        except Exception as e:
+            self.last_error = str(e)
+        return None
+
+
+class FyersQuotePriceSource:
+    """Fyers se live LTP poll karta hai (fyersModel.quotes)."""
+
+    def __init__(self, exchange: str, symbol: str, client_id: str | None = None,
+                 access_token: str | None = None, poll_interval: float = 2.0):
+        self.exchange = exchange
+        self.symbol = symbol
+        self.poll_interval = poll_interval
+        self.last_error: str | None = None
+        self._fyers = None
+        if client_id and access_token:
+            from fyers_apiv3 import fyersModel  # lazy — optional dependency
+            self._fyers = fyersModel.fyersModel(
+                client_id=client_id, token=access_token, is_async=False, log_path="")
+
+    async def get_price(self) -> tuple[float, str] | None:
+        if self._fyers is None:
+            return None
+        try:
+            fsym = f"{self.exchange}:{self.symbol}-EQ"
+            resp = await asyncio.to_thread(self._fyers.quotes, {"symbols": fsym})
+            for row in resp.get("d", []):
+                if row.get("n") == fsym and isinstance(row.get("v"), dict):
+                    lp = row["v"].get("lp")
+                    if lp:
+                        return float(lp), datetime.now(timezone.utc).isoformat()
+        except Exception as e:
+            self.last_error = str(e)
+        return None
+
+
 # ---------- live trader ----------
 class LiveTrader:
     def __init__(self, instrument: str, strategy: str = "ema_cross",

@@ -148,7 +148,7 @@ ai-quant-platform/
 │   │   ├── paper.py    # ✅ Phase 3 — paper trader (replay/live, kill switch)
 │   │   ├── strategies/evaluator.py  # ✅ Phase 4 — shared strategy logic (paper + live)
 │   │   ├── kite_broker.py           # ✅ Phase 6 — compat shim (neeche dekho)
-│   │   ├── brokers/                 # ✅ Phase 6 — multi-broker: base + kite + dhan + factory
+│   │   ├── brokers/                 # ✅ Phase 6+7 — base + kite + dhan + upstox + fyers + factory
 │   │   └── live.py                  # ✅ Phase 4 — LiveTrader + price sources (replay/Kite/Dhan)
 │   ├── agent/          # ✅ Phase 2 — AI pipeline, LLM clients, registry, FastAPI + CLI
 │   ├── api/            # ✅ Phase 3+4+6 — orchestration API (REST + WebSocket, live + brokers)
@@ -180,7 +180,7 @@ ai-quant-platform/
 ## 🧪 Testing
 
 ```bash
-# Full test suite — Phase 0, 1, 2, 3, 4, 5, 6 (55 tests)
+# Full test suite — Phase 0, 1, 2, 3, 4, 5, 6, 7 (64 tests)
 # API/dashboard tests ke liye servers chalne chahiye (yeh auto-SKIP hote hain agar band hon)
 python -m apps.api.main &          # port 8000
 cd apps/dashboard && npm run dev & # port 5173
@@ -223,6 +223,28 @@ python -m apps.engine.main live --instrument NSE:TESTCO --broker dhan --mode dry
 curl localhost:8000/brokers
 ```
 
+## 🏭 Phase 7 — 4 Brokers: Kite + Dhan + Upstox + Fyers
+
+Registry pattern ne prove kar diya: **naya broker = ek file + `@register_broker`**. Phase 7 mein 2 aur brokers aaye:
+
+| Broker | Registry name | SDK (extra) | Credentials | Alag baatein |
+|---|---|---|---|---|
+| Zerodha | `kite` | `.[kite]` (kiteconnect) | `KITE_API_KEY` + token | int instrument token |
+| Dhan | `dhan` | `.[dhan]` (dhanhq) | `DHAN_CLIENT_ID` + token | security_id string, `NSE_EQ`, CNC/INTRA |
+| **Upstox** 🆕 | `upstox` | `.[upstox]` (upstox-python-sdk) | `UPSTOX_ACCESS_TOKEN` | `NSE_EQ\|ISIN` key, products D/I, lowercase status |
+| **Fyers** 🆕 | `fyers` | `.[fyers]` (fyers-apiv3) | `FYERS_CLIENT_ID` + token | `NSE:SBIN-EQ` symbol, side/type numbers, int status codes |
+
+- **Sab brokers same interface** — `BrokerBase`. LiveTrader, risk engine, kill switch, dashboard — sab bina badle kaam karte hain.
+- **Dashboard automatic** — Live page `/brokers` se dynamic fetch karta hai; naye brokers bina UI change ke dikh gaye.
+- **Same safety sab par** — 4 gates, risk engine ke 11 checks, kill switch — har broker pe.
+- **CLI/API** — `--broker upstox|fyers`, `/live/start {"broker": "fyers"}`.
+
+```bash
+# Kisi bhi broker pe dry-run
+python -m apps.engine.main live --instrument NSE:TESTCO --broker fyers --mode dry_run
+curl localhost:8000/brokers    # → 4 brokers, creds status ke saath
+```
+
 ## 🗺️ Roadmap
 
 - [x] **Phase 0** — Data foundation (fetch → store → query)
@@ -231,8 +253,9 @@ curl localhost:8000/brokers
 - [x] **Phase 3** — Dashboard (React) + orchestration API + paper trading
 - [x] **Phase 4** — Risk engine hardening + live trading (Kite, gated, dry-run default)
 - [x] **Phase 5** — OSS release (packaging, Docker, CI, community, docs)
-- [x] **Phase 6** — Multi-broker abstraction + Dhan + Live dashboard ← *abhi yahin hain*
-- [ ] **Phase 7** — More brokers (Upstox/Fyers), F&O, mobile app, hosted SaaS
+- [x] **Phase 6** — Multi-broker abstraction + Dhan + Live dashboard
+- [x] **Phase 7** — 4 brokers: Kite + Dhan + Upstox + Fyers ← *abhi yahin hain*
+- [ ] **Phase 8** — F&O support, mobile app, hosted SaaS
 
 ## 📚 Design Docs
 

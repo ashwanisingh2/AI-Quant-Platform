@@ -1,4 +1,4 @@
-"""Full test suite — Phase 0, 1, 2, 3, 4, 5, 6.
+"""Full test suite — Phase 0, 1, 2, 3, 4, 5, 6, 7.
 
 Run:  python scripts/test_all.py
 
@@ -632,12 +632,12 @@ def t_p6_broker_base_conformance():
                   "cancel_order", "open_orders", "all_orders", "positions",
                   "margins", "square_off_all", "set_price"):
             assert callable(getattr(b, m)), f"{name}.{m} missing"
-    # unknown broker → ValueError
+    # unknown broker → ValueError ("unknown_broker" kabhi valid nahi hoga)
     try:
-        get_broker("upstox")
+        get_broker("unknown_broker")
         raise AssertionError("unknown broker allowed")
     except ValueError as e:
-        assert "upstox" in str(e)
+        assert "unknown_broker" in str(e)
     # purana import path (shim) abhi bhi chalega
     from apps.engine.brokers.kite_broker import KiteBroker
     from apps.engine.kite_broker import KiteBroker as ShimKite
@@ -736,9 +736,9 @@ def t_p6_cli_live_broker():
     assert "Live Trader (dry_run)" in r.stdout
     # unknown broker → non-zero exit
     r2 = subprocess.run([sys.executable, "-m", "apps.engine.main", "live",
-                         "--instrument", "NSE:TESTCO", "--broker", "upstox"],
+                         "--instrument", "NSE:TESTCO", "--broker", "unknown_broker"],
                         capture_output=True, text=True, cwd=ROOT, timeout=30)
-    assert r2.returncode != 0 and "upstox" in (r2.stdout + r2.stderr)
+    assert r2.returncode != 0 and "unknown_broker" in (r2.stdout + r2.stderr)
     # kite abhi bhi default
     r3 = subprocess.run([sys.executable, "-m", "apps.engine.main", "live",
                          "--instrument", "NSE:TESTCO", "--mode", "dry_run",
@@ -783,6 +783,146 @@ check("packaging: dhan extra + .env.example", t_p6_pyproject_dhan_extra)
 check("dashboard: production build with Live page", t_p6_dashboard_build)
 
 # ============================================================
+print("\n🏭 PHASE 7 — 4 Brokers (Kite + Dhan + Upstox + Fyers)")
+# ============================================================
+
+def t_p7_registry_four_brokers():
+    from apps.engine.brokers import BrokerBase, available_brokers, get_broker
+    names = {b["name"] for b in available_brokers()}
+    assert names == {"kite", "dhan", "upstox", "fyers"}, names
+    for name in names:
+        b = get_broker(name, dry_run=True)
+        assert isinstance(b, BrokerBase) and b.dry_run, name
+    # naya broker = ek file: registry auto-picks it (import pe register hota hai)
+    from apps.engine.brokers.fyers_broker import FyersBroker
+    from apps.engine.brokers.upstox_broker import UpstoxBroker
+    assert FyersBroker.name == "fyers" and UpstoxBroker.name == "upstox"
+
+
+def t_p7_upstox_dry_run():
+    from apps.engine.brokers import get_broker
+    b = get_broker("upstox", dry_run=True)
+    assert b.connect()["status"].startswith("connected")
+    # upstox ki mapping: NSE_EQ segment, D/I products, NSE_EQ|ISIN token
+    assert b._segment("NSE") == "NSE_EQ"
+    assert b._product("CNC") == "D" and b._product("MIS") == "I"
+    token = b.resolve_token("NSE", "TESTCO")
+    assert token.startswith("NSE_EQ|")
+    b.set_price(250.0)
+    o = b.place_market_order("NSE", "TESTCO", "BUY", 10)
+    assert o["status"] == "COMPLETE" and o["price"] == 250.0
+    pos = {p["symbol"]: p for p in b.positions()}
+    assert pos["TESTCO"]["qty"] == 10 and pos["TESTCO"]["avg_price"] == 250.0
+    assert b.cancel_order(o["order_id"])["status"] == "NOT_FOUND"
+    closed = b.square_off_all()
+    assert len(closed) == 1 and closed[0]["side"] == "SELL"
+    assert all(p["qty"] == 0 for p in b.positions())
+    assert b.quote("NSE", "TESTCO")["last_price"] == 250.0
+
+
+def t_p7_fyers_dry_run():
+    from apps.engine.brokers import get_broker
+    from apps.engine.brokers.fyers_broker import FyersBroker
+    b = get_broker("fyers", dry_run=True)
+    assert b.connect()["status"].startswith("connected")
+    # fyers ki mapping: symbol "NSE:SBIN-EQ", side numbers, status ints
+    assert FyersBroker.fyers_symbol("NSE", "SBIN") == "NSE:SBIN-EQ"
+    assert FyersBroker._strip_suffix("NSE:SBIN-EQ-CNC") == "SBIN"
+    assert FyersBroker._strip_suffix("NSE:SBIN-EQ") == "SBIN"
+    assert FyersBroker.SIDES == {"BUY": 1, "SELL": -1}
+    assert FyersBroker.STATUS_MAP[2] == "COMPLETE" and FyersBroker.STATUS_MAP[5] == "REJECTED"
+    assert b._product("CNC") == "CNC" and b._product("MIS") == "INTRADAY"
+    # fyers mein symbol hi token hai
+    assert b.resolve_token("NSE", "TESTCO") == "NSE:TESTCO-EQ"
+    b.set_price(250.0)
+    o = b.place_market_order("NSE", "TESTCO", "BUY", 10)
+    assert o["status"] == "COMPLETE" and o["price"] == 250.0
+    pos = {p["symbol"]: p for p in b.positions()}
+    assert pos["TESTCO"]["qty"] == 10
+    assert b.cancel_order(o["order_id"])["status"] == "NOT_FOUND"
+    closed = b.square_off_all()
+    assert len(closed) == 1 and closed[0]["side"] == "SELL"
+    assert all(p["qty"] == 0 for p in b.positions())
+
+
+def t_p7_live_trader_new_brokers():
+    import asyncio
+
+    from apps.engine.brokers import get_broker
+    from apps.engine.live import LiveTrader, ReplayPriceSource
+    from libs.risk.engine import RiskEngine, RiskLimits
+
+    async def one(broker_name):
+        broker = get_broker(broker_name, dry_run=True)
+        src = ReplayPriceSource("NSE:TESTCO", speed=0, limit=60)
+        t = LiveTrader("NSE:TESTCO", "ema_cross", {}, broker=broker,
+                       risk_engine=RiskEngine(RiskLimits(trading_hours_only=False)),
+                       price_source=src, capital=1_000_000)
+        await t.start()
+        await asyncio.wait_for(t._task, timeout=30)
+        s = t.state()
+        # 💰 cash invariant from broker ledger
+        cash = 1_000_000.0
+        n = 0
+        for o in broker.all_orders():
+            if o["status"] == "COMPLETE":
+                n += 1
+                cash += o["qty"] * o["price"] * (1 if o["side"] == "SELL" else -1)
+        assert n >= 1, f"{broker_name}: koi order nahi hua"
+        assert abs(s["cash"] - cash) < 0.01, f"{broker_name} cash mismatch"
+        return s
+
+    async def run():
+        for name in ("upstox", "fyers"):
+            s = await one(name)
+            assert s["mode"] == "dry_run" and s["running"] is False
+            assert len(s["equity_curve"]) > 10
+
+    asyncio.run(run())
+
+
+def t_p7_cli_broker():
+    for broker in ("fyers", "upstox"):
+        r = subprocess.run([sys.executable, "-m", "apps.engine.main", "live",
+                            "--instrument", "NSE:TESTCO", "--strategy", "ema_cross",
+                            "--mode", "dry_run", "--broker", broker,
+                            "--speed", "0", "--limit", "40"],
+                           capture_output=True, text=True, cwd=ROOT, timeout=60)
+        assert r.returncode == 0, f"{broker} CLI failed: {r.stderr[-400:]}"
+        assert "Live Trader (dry_run)" in r.stdout, f"{broker}: output missing"
+
+
+def t_p7_pyproject_extras():
+    import tomllib
+    with open(ROOT / "pyproject.toml", "rb") as f:
+        pp = tomllib.load(f)
+    extras = pp["project"]["optional-dependencies"]
+    assert "upstox-python-sdk" in " ".join(extras["upstox"])
+    assert "fyers-apiv3" in " ".join(extras["fyers"])
+    allx = " ".join(extras["all"])
+    assert "upstox-python-sdk" in allx and "fyers-apiv3" in allx
+    # .env.example mein sab brokers ke creds hain (commented)
+    env = (ROOT / ".env.example").read_text()
+    for v in ("UPSTOX_API_KEY", "UPSTOX_ACCESS_TOKEN", "FYERS_CLIENT_ID", "FYERS_ACCESS_TOKEN"):
+        assert f"# {v}=" in env, f"{v} missing from .env.example"
+
+
+def t_p7_live_page_dynamic_brokers():
+    # Live page /brokers se dynamic fetch karta hai — naye brokers automatically dikhenge
+    src = (ROOT / "apps" / "dashboard" / "src" / "pages" / "Live.jsx").read_text()
+    assert "apiGet('/brokers')" in src, "Live page /brokers fetch nahi karta"
+    assert "apiPost('/live/start'" in src, "Live page /live/start call nahi karta"
+
+
+check("brokers: registry has 4 (kite/dhan/upstox/fyers)", t_p7_registry_four_brokers)
+check("brokers: upstox dry-run (fill/positions/square-off)", t_p7_upstox_dry_run)
+check("brokers: fyers dry-run (fill/positions/square-off)", t_p7_fyers_dry_run)
+check("brokers: live trader with upstox + fyers (cash invariant)", t_p7_live_trader_new_brokers)
+check("CLI: live --broker fyers + upstox", t_p7_cli_broker)
+check("packaging: upstox/fyers extras + .env.example", t_p7_pyproject_extras)
+check("dashboard: Live page fetches brokers dynamically", t_p7_live_page_dynamic_brokers)
+
+# ============================================================
 print("\n🌐 PHASE 3 — API + Dashboard (live servers)")
 # ============================================================
 
@@ -815,7 +955,9 @@ if not api_up():
                  "API live gates (live mode blocked without env)",
                  "API kill-switch kills live too",
                  "API brokers list (kite + dhan)",
-                 "API live dhan dry-run + invalid broker gate"]:
+                 "API live dhan dry-run + invalid broker gate",
+                 "API brokers list (4 brokers)",
+                 "API live fyers dry-run + broker gate"]:
         skip(name, "API server nahi chal raha (python -m apps.api.main)")
 else:
     def t_api_health():
@@ -986,13 +1128,14 @@ else:
         assert s["running"] is True and s["mode"] == "dry_run"
         assert len(s["equity_curve"]) > 0
         http_post(API + "/live/stop")
-        # invalid broker → 400
+        # invalid broker → 400 ("unknown_broker" kabhi valid nahi hoga)
         try:
             http_post(API + "/live/start", {"instrument": "NSE:TESTCO",
-                                            "mode": "dry_run", "broker": "upstox"})
+                                            "mode": "dry_run", "broker": "unknown_broker"})
             raise AssertionError("invalid broker allowed (expected 400)")
         except urllib.error.HTTPError as e:
             assert e.code == 400, f"expected 400, got {e.code}"
+            assert "unknown_broker" in e.read().decode()
         # live mode with dhan but no env gate → 400
         try:
             http_post(API + "/live/start", {"instrument": "NSE:TESTCO", "mode": "live",
@@ -1004,6 +1147,47 @@ else:
 
     check("API brokers list (kite + dhan)", t_api_brokers)
     check("API live dhan dry-run + invalid broker gate", t_api_live_dhan_dry_run)
+
+    def t_api_brokers_four():
+        r = http_get(API + "/brokers")
+        names = {b["name"] for b in r["brokers"]}
+        assert names == {"kite", "dhan", "upstox", "fyers"}, names
+        info = {b["name"]: b for b in r["brokers"]}
+        assert info["upstox"]["required_env"] == ["UPSTOX_ACCESS_TOKEN"]
+        assert info["fyers"]["required_env"] == ["FYERS_CLIENT_ID", "FYERS_ACCESS_TOKEN"]
+        assert all(b["credentials_present"] is False for b in r["brokers"]), "sandbox mein creds nahi hone chahiye"
+
+    def t_api_live_fyers_dry_run():
+        # fyers broker, dry_run → chalega (replay + simulated orders)
+        r = http_post(API + "/live/start", {"instrument": "NSE:TESTCO",
+                                            "strategy": "ema_cross",
+                                            "mode": "dry_run", "broker": "fyers",
+                                            "capital": 1_000_000, "speed": 0.05,
+                                            "limit": 60})
+        assert r["status"] == "started" and r["broker"] == "fyers", r
+        time.sleep(1.5)
+        s = http_get(API + "/live/status")
+        assert s["running"] is True and s["mode"] == "dry_run"
+        assert len(s["equity_curve"]) > 0
+        http_post(API + "/live/stop")
+        # upstox bhi dry_run mein chalega
+        r2 = http_post(API + "/live/start", {"instrument": "NSE:TESTCO",
+                                             "mode": "dry_run", "broker": "upstox",
+                                             "capital": 1_000_000, "speed": 0.05,
+                                             "limit": 40})
+        assert r2["status"] == "started" and r2["broker"] == "upstox", r2
+        http_post(API + "/live/stop")
+        # live mode with upstox but no env gate → 400
+        try:
+            http_post(API + "/live/start", {"instrument": "NSE:TESTCO", "mode": "live",
+                                            "broker": "upstox", "capital": 10_000,
+                                            "confirm": "I UNDERSTAND THIS TRADES REAL MONEY"})
+            raise AssertionError("upstox live allowed without env gate (expected 400)")
+        except urllib.error.HTTPError as e:
+            assert e.code == 400, f"expected 400, got {e.code}"
+
+    check("API brokers list (4 brokers)", t_api_brokers_four)
+    check("API live fyers dry-run + broker gate", t_api_live_fyers_dry_run)
 
 # ============================================================
 # SUMMARY

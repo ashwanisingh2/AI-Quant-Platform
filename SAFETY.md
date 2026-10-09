@@ -45,7 +45,17 @@ Bina inke live start nahi hoga — engine 400 error dega. Ye jaan-bujhkar rakha 
 3. Yaad rakho — Dhan ki baatein alag hain: security_id (e.g. `1333` = HDFC Bank), segments `NSE_EQ`, product `CNC`/`INTRA`. Hamara adapter (`DhanBroker`) ye sab handle karta hai.
 4. `GET /brokers` se dekh sakte ho kaun-kaun se brokers hain aur creds hain ya nahi.
 
-**Koi bhi broker ho — same safety:** risk engine ke 11 checks, kill switch, aur 4 gates sab par lagte hain.
+**Upstox:**
+1. [Upstox Developer](https://upstox.com/developer/) pe app banao.
+2. `UPSTOX_API_KEY` + `UPSTOX_ACCESS_TOKEN` lo (login flow ke baad access token milta hai).
+3. Yaad rakho — Upstox ki baatein alag hain: instrument key `NSE_EQ|ISIN`, products `D` (delivery) / `I` (intraday). Hamara adapter (`UpstoxBroker`) ye sab handle karta hai.
+
+**Fyers:**
+1. [Fyers API](https://myapi.fyers.in/) pe app banao.
+2. `FYERS_CLIENT_ID` (e.g. `AB12345-100`) + `FYERS_ACCESS_TOKEN` lo.
+3. Yaad rakho — Fyers ke symbols `NSE:SBIN-EQ` format mein hote hain, aur order side/type **numbers** mein (1=BUY, 2=MARKET). Hamara adapter (`FyersBroker`) ye sab handle karta hai.
+
+**Koi bhi broker ho — same safety:** risk engine ke 11 checks, kill switch, aur 4 gates sab par lagte hain. `GET /brokers` se dekh sakte ho kaun-kaun se hain aur creds hain ya nahi.
 
 ## 4️⃣ Pehla live run — chhota aur dhyaan se
 

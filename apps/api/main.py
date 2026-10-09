@@ -36,9 +36,11 @@ from apps.data_gateway.main import get_provider
 from apps.engine.brokers import available_brokers, get_broker
 from apps.engine.live import (
     DhanQuotePriceSource,
+    FyersQuotePriceSource,
     KiteQuotePriceSource,
     LiveTrader,
     ReplayPriceSource,
+    UpstoxQuotePriceSource,
 )
 from apps.engine.paper import PaperTrader
 from apps.engine.runner import RESULTS_DIR as BACKTESTS_DIR
@@ -301,6 +303,12 @@ def _broker_kwargs(broker_name: str) -> dict:
     if broker_name == "dhan":
         return {"client_id": os.environ.get("DHAN_CLIENT_ID"),
                 "access_token": os.environ.get("DHAN_ACCESS_TOKEN")}
+    if broker_name == "upstox":
+        return {"api_key": os.environ.get("UPSTOX_API_KEY"),
+                "access_token": os.environ.get("UPSTOX_ACCESS_TOKEN")}
+    if broker_name == "fyers":
+        return {"client_id": os.environ.get("FYERS_CLIENT_ID"),
+                "access_token": os.environ.get("FYERS_ACCESS_TOKEN")}
     return {}
 
 
@@ -314,6 +322,13 @@ def _price_source(broker_name: str, exchange: str, symbol: str):
         return DhanQuotePriceSource(exchange, symbol,
                                     client_id=os.environ.get("DHAN_CLIENT_ID"),
                                     access_token=os.environ.get("DHAN_ACCESS_TOKEN"))
+    if broker_name == "upstox":
+        return UpstoxQuotePriceSource(exchange, symbol,
+                                      access_token=os.environ.get("UPSTOX_ACCESS_TOKEN"))
+    if broker_name == "fyers":
+        return FyersQuotePriceSource(exchange, symbol,
+                                     client_id=os.environ.get("FYERS_CLIENT_ID"),
+                                     access_token=os.environ.get("FYERS_ACCESS_TOKEN"))
     return None
 
 
