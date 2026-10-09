@@ -1,7 +1,7 @@
 """Orchestration API — dashboard ko sab kuch deta hai.
 
 Endpoints (dashboard ka /api proxy inhe root pe bhejta hai):
-  GET  /health  /strategies  /instruments  /portfolio  /live/status
+  GET  /  /health  /strategies  /instruments  /portfolio  /live/status  /fno/chain
   POST /data/fetch           GET /data/candles
   POST /backtests            GET /backtests
   POST /agent/analyze        GET /agent/runs
@@ -141,6 +141,36 @@ class LiveStartRequest(BaseModel):
 
 
 # ---------- endpoints ----------
+@app.get("/")
+def root():
+    """API index — preview open karne pe yeh dikhega (404 nahi).
+
+    Version pyproject se padhta hai — hamesha fresh.
+    """
+    import tomllib
+    with open(Path(__file__).parents[2] / "pyproject.toml", "rb") as f:
+        version = tomllib.load(f)["project"]["version"]
+    return {
+        "service": "AI Quant Platform — API",
+        "version": version,
+        "status": "ok",
+        "docs": "/docs  (Swagger UI)",
+        "health": "/health",
+        "live_trading_enabled": LIVE_ENABLED,
+        "endpoints": {
+            "data": ["GET /instruments", "POST /data/fetch", "GET /data/candles"],
+            "fno": ["GET /fno/underlyings", "GET /fno/chain"],
+            "backtests": ["GET /strategies", "POST /backtests", "GET /backtests"],
+            "agent": ["POST /agent/analyze", "GET /agent/runs",
+                      "POST /signals/{id}/approve", "POST /signals/{id}/reject"],
+            "trading": ["GET /portfolio", "POST /paper/start", "POST /paper/stop",
+                        "GET /brokers", "POST /live/start", "POST /live/stop",
+                        "GET /live/status", "POST /kill-switch"],
+            "realtime": ["WS /ws/events"],
+        },
+    }
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "api",

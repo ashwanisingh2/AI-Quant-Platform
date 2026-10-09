@@ -511,7 +511,7 @@ def t_p5_packaging():
     with open(ROOT / "pyproject.toml", "rb") as f:
         pp = tomllib.load(f)
     assert pp["project"]["name"] == "ai-quant-platform"
-    assert pp["project"]["version"] == "0.5.0"
+    assert pp["project"]["version"] == "0.6.0"
     assert pp["project"]["license"]["text"] == "MIT"
     scripts = pp["project"]["scripts"]
     assert set(scripts) == {"aiq-data", "aiq-engine", "aiq-agent", "aiq-api"}, scripts
@@ -1235,7 +1235,8 @@ if not api_up():
                  "API brokers list (4 brokers)",
                  "API live fyers dry-run + broker gate",
                  "API F&O flow (fetch + paper + kill)",
-                 "API F&O option chain (strikes + premiums)"]:
+                 "API F&O option chain (strikes + premiums)",
+                 "API root index (no more 404)"]:
         skip(name, "API server nahi chal raha (python -m apps.api.main)")
 else:
     def t_api_health():
@@ -1525,6 +1526,21 @@ else:
             assert e.code == 400, f"expected 400, got {e.code}"
 
     check("API F&O option chain (strikes + premiums)", t_api_fno_chain)
+
+    def t_api_root_index():
+        # GET / pe 404 nahi — proper index dikhe (preview open karne pe)
+        r = http_get(API + "/")
+        assert r["status"] == "ok" and "AI Quant" in r["service"], r
+        assert r["health"] == "/health" and "/docs" in r["docs"]
+        # version pyproject se match kare (stale nahi)
+        import tomllib
+        with open(ROOT / "pyproject.toml", "rb") as f:
+            v = tomllib.load(f)["project"]["version"]
+        assert r["version"] == v, f"version mismatch: {r['version']} != {v}"
+        for group in ("data", "fno", "backtests", "agent", "trading", "realtime"):
+            assert group in r["endpoints"] and r["endpoints"][group], group
+
+    check("API root index (no more 404)", t_api_root_index)
 
 # ============================================================
 # SUMMARY
