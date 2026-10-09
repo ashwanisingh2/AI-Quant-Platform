@@ -6,9 +6,11 @@ import DataPage from './pages/Data'
 import FnoPage from './pages/Fno'
 import Live from './pages/Live'
 import Operations from './pages/Operations'
+import Radar from './pages/Radar'
 import { apiGet, wsUrl, setAuthToken, getAuthToken } from './api'
 
 const TABS = [
+  { id: 'radar', icon: '◉', label: 'Market radar', description: 'Daily strength, sector breadth and transparent signal evidence' },
   { id: 'operations', icon: '◈', label: 'Command center', description: 'System health, session history and recovery' },
   { id: 'agent', icon: '◎', label: 'Research desk', description: 'Evidence, model reasoning and human approval' },
   { id: 'backtests', icon: '↗', label: 'Strategy lab', description: 'Reproducible experiments on historical data' },
@@ -96,7 +98,7 @@ export default function App() {
   )
 
   const current = TABS.find(t => t.id === tab)
-  const Page = { operations: Operations, overview: Overview, live: Live, fno: FnoPage, agent: AgentConsole, backtests: Backtests, data: DataPage }[tab]
+  const Page = { radar: Radar, operations: Operations, overview: Overview, live: Live, fno: FnoPage, agent: AgentConsole, backtests: Backtests, data: DataPage }[tab]
   return (
     <div className="app">
       <aside className="sidebar">

@@ -232,3 +232,15 @@ pre.trace { background:#f6f8fa; }
 .recovery-modal textarea { min-height:100px; }
 @media(max-width:1100px) { .sidebar { width:205px; padding:25px 12px; } .workspace { margin-left:205px; width:calc(100% - 205px); } .content { padding:25px 22px; } .flow-visual { width:180px; padding-left:20px; } .stream-label { display:none; } .operations-columns { grid-template-columns:1fr; gap:0; } }
 @media(max-width:760px) { .app { display:block; } .sidebar { position:static; width:100%; padding:16px; } .sidebar .wordmark { font-size:16px; } .workspace-label,.sidebar-bottom { display:none; } .sidebar nav { display:flex; overflow:auto; gap:5px; margin-top:15px; } .nav-item { flex:0 0 auto; width:auto; padding:8px 10px; font-size:11px; margin:0; } .nav-item > span { display:none; } .workspace { margin:0; width:100%; } .workspace-bar { padding:0 18px; height:50px; } .content { padding:24px 16px; } .page-heading h1 { font-size:25px; } .market-tag,.crumb { display:none; } .command-hero { padding:23px; } .command-hero h2 { font-size:32px; } .flow-visual { display:none; } .grid { grid-template-columns:1fr!important; } .stat .value { font-size:25px; } .card { padding:17px; overflow:auto; } .workspace-footer { padding:18px; flex-direction:column; gap:5px; } .login-shell { grid-template-columns:1fr; } .login-story { padding:30px; gap:35px; } .login-story h1 { font-size:43px; } .login-principles,.login-foot { display:none; } .login-panel { padding:35px 25px; } .form-row > div { max-width:100%; } }
+
+.radar-stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:16px; margin-top:20px; }
+.radar-stats h2 { font-size:24px; }
+.radar-stats small,.radar-stats span { color:var(--muted); font-size:11px; }
+.radar-layout { display:grid; grid-template-columns:minmax(0,1.3fr) minmax(0,1fr); gap:18px; }
+.radar-table { overflow-x:auto; }
+.radar-stock { background:transparent; color:inherit; border:0; cursor:pointer; text-align:left; padding:8px 0; font-weight:600; }
+.radar-stock:hover { color:#6b9fff; }
+.radar svg { width:100%; margin-top:20px; }
+.radar-sectors { display:flex; flex-wrap:wrap; gap:24px; }
+.radar-sectors > div { min-width:130px; padding:16px; border:1px solid #303c50; border-radius:10px; }
+@media(max-width:1000px) { .radar-layout { grid-template-columns:1fr; } .radar-stats { grid-template-columns:repeat(2,minmax(0,1fr)); } }

@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field
 from apps.agent.main import analyze as agent_analyze
 from apps.agent.registry import SignalRegistry
 from apps.api.auth import AuthMiddleware, allowed_origins, authenticate_websocket
+from apps.api.radar import snapshot as radar_snapshot
 from apps.data_gateway.main import get_provider
 from apps.engine.brokers import available_brokers, get_broker
 from apps.engine.live import (
@@ -563,6 +564,12 @@ async def ws_events(ws: WebSocket):
             await ws.receive_text()  # keep-alive; client messages ignored
     except WebSocketDisconnect:
         manager.disconnect(ws)
+
+
+
+@app.get("/radar")
+def market_radar():
+    return radar_snapshot()
 
 
 def run():
