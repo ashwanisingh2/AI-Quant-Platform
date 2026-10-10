@@ -24,7 +24,7 @@ RUN pip install ".[kite]"
 RUN groupadd --gid 10001 quant && useradd --uid 10001 --gid quant --no-create-home quant \
     && mkdir -p /app/data && chown quant:quant /app/data
 USER quant
-VOLUME ["/app/data"]
+# Attach /app/data through Railway Volumes or docker compose volumes.
 
 EXPOSE 8000
 
