@@ -570,8 +570,11 @@ def t_p5_docker_stack():
     assert svcs["dashboard"]["build"] == "./apps/dashboard"
     assert "healthcheck" in svcs["api"]
     # dashboard nginx proxy: /api strip + /ws websocket
-    nginx = (ROOT / "apps" / "dashboard" / "nginx.conf").read_text()
-    assert "proxy_pass http://api:8000/;" in nginx, "api proxy prefix strip missing"
+    nginx = (ROOT / "apps" / "dashboard" / "nginx" / "default.conf.template").read_text()
+    assert "proxy_pass http://${API_UPSTREAM}/;" in nginx, "api proxy prefix strip missing"
+    assert "listen ${PORT};" in nginx, "nginx PORT template missing"
+    df_dash = (ROOT / "apps" / "dashboard" / "Dockerfile").read_text()
+    assert "COPY nginx/default.conf.template /etc/nginx/templates/" in df_dash, "dashboard Dockerfile nginx template path"
     assert "location /ws" in nginx and "Upgrade $http_upgrade" in nginx
     # Root Dockerfile: module startup keeps data paths under the mounted /app root.
     df = (ROOT / "Dockerfile").read_text()
