@@ -2,10 +2,20 @@
 
 Run: python -m unittest scripts.test_kotak_broker
 """
+import importlib.util
+import logging
 import unittest
 
 from apps.engine.brokers import available_brokers, get_broker
-from apps.engine.brokers.kotak_broker import KotakBroker, _marketable_limit
+from apps.engine.brokers.kotak_broker import (
+    SEBI_OPS_LIMIT,
+    KotakBroker,
+    KotakSessionExpired,
+    OrderRateGuard,
+    OrderRateLimitExceeded,
+    _marketable_limit,
+    redact_sdk_logs,
+)
 
 
 class FakeNeo:
@@ -52,8 +62,8 @@ class FakeNeo:
 
     def search_scrip(self, exchange_segment="", symbol="", **kw):
         self._log("search_scrip", exchange_segment=exchange_segment, symbol=symbol)
-        return [{"pTrdSymbol": "RELIANCE-EQ", "pSymbol": "2885"},
-                {"pTrdSymbol": "RELIANCE-BE", "pSymbol": "9999"}]
+        return [{"pTrdSymbol": f"{symbol}-EQ", "pSymbol": str(abs(hash(symbol)) % 90000 + 10000)},
+                {"pTrdSymbol": f"{symbol}-BE", "pSymbol": "1"}]
 
     def quotes(self, instrument_tokens=None, quote_type=None):
         self._log("quotes", instrument_tokens=instrument_tokens, quote_type=quote_type)
@@ -241,6 +251,116 @@ class PortfolioTests(unittest.TestCase):
         broker = live_broker()
         broker.connect()
         self.assertEqual(broker.margins()["available_cash"], 19.41)
+
+
+class OrderRateGuardTests(unittest.TestCase):
+    def test_ten_per_second_allowed_eleventh_blocked(self):
+        guard = OrderRateGuard(clock=lambda: 100.0)
+        for _ in range(SEBI_OPS_LIMIT):
+            guard.acquire("NSE")
+        with self.assertRaises(OrderRateLimitExceeded):
+            guard.acquire("NSE")
+
+    def test_window_slides_after_one_second(self):
+        now = [100.0]
+        guard = OrderRateGuard(clock=lambda: now[0])
+        for _ in range(SEBI_OPS_LIMIT):
+            guard.acquire("NSE")
+        now[0] = 101.0
+        guard.acquire("NSE")  # purana window khatam
+
+    def test_limit_is_per_exchange(self):
+        guard = OrderRateGuard(max_per_second=1, clock=lambda: 5.0)
+        guard.acquire("NSE")
+        guard.acquire("BSE")
+        with self.assertRaises(OrderRateLimitExceeded):
+            guard.acquire("NSE")
+
+    def test_invalid_limit_rejected(self):
+        for bad in (0, 11):
+            with self.assertRaises(ValueError):
+                OrderRateGuard(max_per_second=bad)
+
+
+class LiveSafetyTests(unittest.TestCase):
+    def setUp(self):
+        self.fake = FakeNeo(ltp=100.0)
+        self.broker = live_broker(self.fake)
+        self.broker.connect()
+
+    def test_eleventh_order_in_a_second_is_never_sent(self):
+        self.broker._rate = OrderRateGuard(clock=lambda: 50.0)
+        for _ in range(SEBI_OPS_LIMIT):
+            self.broker.place_market_order("NSE", "RELIANCE", "BUY", 1)
+        with self.assertRaises(OrderRateLimitExceeded):
+            self.broker.place_market_order("NSE", "RELIANCE", "BUY", 1)
+        self.assertEqual(len(self.fake.placed()), SEBI_OPS_LIMIT)
+
+    def test_cancel_counts_toward_ops_limit(self):
+        self.broker._rate = OrderRateGuard(max_per_second=1, clock=lambda: 50.0)
+        self.broker.place_market_order("NSE", "RELIANCE", "BUY", 1)
+        with self.assertRaises(OrderRateLimitExceeded):
+            self.broker.cancel_order("250122000612876")
+        self.assertNotIn("cancel_order", [n for n, _ in self.fake.calls])
+
+    def test_explicit_broker_reject_is_rejected_not_unknown(self):
+        self.fake.place_response = {"stat": "Not_Ok", "stCode": 1003, "emsg": "insufficient funds"}
+        order = self.broker.place_market_order("NSE", "RELIANCE", "BUY", 1)
+        self.assertEqual(order["status"], "REJECTED")
+        self.assertEqual(order["order_id"], "")
+        self.assertEqual(order["reason_code"], 1003)
+
+    def test_session_expired_raises_specific_error(self):
+        self.fake.place_response = {"stat": "Not_Ok", "stCode": 403}
+        with self.assertRaises(KotakSessionExpired):
+            self.broker.place_market_order("NSE", "RELIANCE", "BUY", 1)
+
+    def test_exception_after_submit_stays_unknown(self):
+        self.fake.place_response = {"error": "timeout"}
+        with self.assertRaises(RuntimeError):
+            self.broker.place_market_order("NSE", "RELIANCE", "BUY", 1)
+
+    def test_square_off_attempts_every_exit_and_reports_blocked_ones(self):
+        self.fake.position_rows = [
+            {"trdSym": "IDEA-EQ", "exSeg": "nse_cm", "cfBuyQty": 5, "flBuyQty": 0},
+            {"trdSym": "TCS-EQ", "exSeg": "nse_cm", "cfBuyQty": 3, "flBuyQty": 0},
+        ]
+        self.broker._rate = OrderRateGuard(max_per_second=1, clock=lambda: 9.0)
+        results = self.broker.square_off_all()
+        self.assertEqual(len(results), 2)
+        self.assertEqual(results[0]["status"], "OPEN")
+        self.assertEqual(results[1]["status"], "NOT_SENT")
+        self.assertEqual(results[1]["error"], "OrderRateLimitExceeded")
+        self.assertEqual(len(self.fake.placed()), 1)
+
+
+@unittest.skipUnless(importlib.util.find_spec("neo_api_client"), "kotakneoapi not installed")
+class LogRedactionTests(unittest.TestCase):
+    def test_structured_sdk_event_is_scrubbed_before_handlers(self):
+        from neo_api_client.logger import get_logger
+
+        captured = []
+
+        class Capture(logging.Handler):
+            def emit(self, record):
+                captured.append(repr(record.msg))
+
+        sdk = logging.getLogger("neo_api_client")
+        capture = Capture()
+        sdk.addHandler(capture)
+        try:
+            redact_sdk_logs(["+919999999999", "U1ABC", "654321"])
+            get_logger("neo_api_client.rest").error(
+                "api_request_connection_error",
+                body={"mobileNumber": "+919999999999", "ucc": "U1ABC", "mpin": "654321"})
+        finally:
+            sdk.removeHandler(capture)
+        self.assertEqual(len(captured), 1)
+        line = captured[0]
+        self.assertNotIn("+919999999999", line)
+        self.assertNotIn("U1ABC", line)
+        self.assertNotIn("654321", line)
+        self.assertIn("***", line)
 
 
 if __name__ == "__main__":

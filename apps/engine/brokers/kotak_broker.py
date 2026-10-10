@@ -15,15 +15,26 @@ Daily login: session roz expire hota hai. TOTP (authenticator ka 6-digit code,
 Static IP: broker par whitelisted IP se hi order accept hote hain. KOTAK_STATIC_IP
 set ho to connect() pe mismatch par session band karke refuse karta hai.
 
-Unknown outcome: order submit ke baad exception aaye to caller ko raise milta hai
-(journal 'unknown' mark karega). Yahan automatic retry nahi hota.
+Order rate: SEBI retail API threshold 10 orders/second per exchange. Placement,
+cancel dono isme count hote hain. Limit local guard se enforce hoti hai — exceed
+hone par order bheja hi nahi jata.
+
+Outcomes (journal ke liye):
+  - Broker ne explicitly reject kiya (stat Not_Ok, session error nahi) → REJECTED.
+  - Session expire (stCode 403) → KotakSessionExpired, naye TOTP ke saath restart.
+  - SDK exception / timeout / order number missing → exception (UNKNOWN). Automatic
+    retry nahi hota; broker order book se reconcile karo.
 
 ⚠️ dry_run=False → REAL MONEY. Sirf tab use karo jab LIVE_TRADING_ENABLED=true ho.
 """
 from __future__ import annotations
 
+import logging
 import math
+import threading
+import time
 import uuid
+from collections import deque
 from datetime import datetime, timezone
 
 from apps.engine.brokers import register_broker
@@ -35,6 +46,83 @@ TICK_SIZE = 0.05
 EQUITY_SERIES = {"EQ", "BE", "BL", "BZ", "SM", "ST", "T0"}
 #: Kotak exchange segments jo F&O hain (positions mein lot size divide hota hai)
 FNO_SEGMENTS = {"nse_fo", "bse_fo", "mcx_fo"}
+#: SEBI retail algo/API threshold (orders per second, per exchange)
+SEBI_OPS_LIMIT = 10
+SESSION_EXPIRED_CODE = 403
+
+
+class KotakSessionExpired(RuntimeError):
+    """Kotak session expire ho gaya — naye TOTP ke saath live session restart karo."""
+
+
+class OrderRateLimitExceeded(RuntimeError):
+    """Local OPS guard ne order rok diya — broker tak request nahi gayi."""
+
+
+class OrderRateGuard:
+    """Sliding-window OPS guard, exchange-wise. Clock injectable (tests ke liye)."""
+
+    def __init__(self, max_per_second: int = SEBI_OPS_LIMIT, clock=time.monotonic):
+        if not 1 <= max_per_second <= SEBI_OPS_LIMIT:
+            raise ValueError(f"OPS limit 1 se {SEBI_OPS_LIMIT} ke beech hona chahiye")
+        self.max_per_second = max_per_second
+        self._clock = clock
+        self._sent: dict[str, deque[float]] = {}
+        self._lock = threading.Lock()
+
+    def acquire(self, exchange: str) -> None:
+        """Request ko slot do, ya OrderRateLimitExceeded. Failed attempts bhi count hote hain."""
+        now = self._clock()
+        with self._lock:
+            window = self._sent.setdefault(exchange, deque())
+            while window and now - window[0] >= 1.0:
+                window.popleft()
+            if len(window) >= self.max_per_second:
+                raise OrderRateLimitExceeded(
+                    f"{exchange}: {self.max_per_second} orders/second limit pahunch gaya")
+            window.append(now)
+
+
+def _scrub(value, secrets: list[str]):
+    """Strings, dict, list/tuple mein secrets ko *** se badal do (structlog event dict bhi cover)."""
+    if isinstance(value, str):
+        for secret in secrets:
+            value = value.replace(secret, "***")
+        return value
+    if isinstance(value, dict):
+        return {k: _scrub(v, secrets) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(_scrub(v, secrets) for v in value)
+    return value
+
+
+class SecretRedactor(logging.Filter):
+    """SDK log record se mobile / UCC / MPIN / key jaise values hata deta hai.
+
+    Handler-level filter hona chahiye: SDK ke records structlog se aate hain (msg = dict),
+    aur child loggers ke records parent logger ke filter se nahi guzarte.
+    """
+
+    def __init__(self, secrets: list[str]):
+        super().__init__()
+        self._secrets = [s for s in secrets if s and len(s) >= 2]
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = _scrub(record.msg, self._secrets)
+        record.args = _scrub(record.args, self._secrets) if record.args else record.args
+        return True
+
+
+def redact_sdk_logs(secrets: list[str]) -> None:
+    """SDK ke handlers (console + file) aur loggers par redaction filter lagao (idempotent)."""
+    sdk_root = logging.getLogger("neo_api_client")
+    for handler in sdk_root.handlers:
+        if not any(isinstance(f, SecretRedactor) for f in handler.filters):
+            handler.addFilter(SecretRedactor(secrets))
+    for name, logger in list(logging.Logger.manager.loggerDict.items()):
+        if isinstance(logger, logging.Logger) and (name == "neo_api_client" or name.startswith("neo_api_client.")):
+            if not any(isinstance(f, SecretRedactor) for f in logger.filters):
+                logger.addFilter(SecretRedactor(secrets))
 
 
 def _ensure_ok(resp, action: str) -> dict:
@@ -43,9 +131,20 @@ def _ensure_ok(resp, action: str) -> dict:
         raise RuntimeError(f"Kotak {action} failed (unexpected response)")
     if any(k in resp for k in ("error", "Error", "Error Message")):
         raise RuntimeError(f"Kotak {action} failed (sdk error)")
+    if resp.get("stCode") == SESSION_EXPIRED_CODE:
+        raise KotakSessionExpired("Kotak session expired — naye TOTP ke saath live start karo")
     if "stat" in resp and str(resp.get("stat", "")).lower() != "ok":
         raise RuntimeError(f"Kotak {action} failed (stCode={resp.get('stCode')})")
     return resp
+
+
+def _is_explicit_reject(resp) -> bool:
+    """Broker ka clear 'Not_Ok' (exception nahi, session error nahi) → order reject hua."""
+    if not isinstance(resp, dict) or any(k in resp for k in ("error", "Error", "Error Message")):
+        return False
+    if resp.get("stCode") == SESSION_EXPIRED_CODE:
+        return False
+    return "stat" in resp and str(resp.get("stat", "")).lower() != "ok"
 
 
 def _rows(resp) -> list[dict]:
@@ -103,6 +202,7 @@ class KotakBroker(BrokerBase):
         self.limit_buffer = limit_buffer
         self._client = client
         self._logged_in = False
+        self._rate = OrderRateGuard()
         self._orders: dict[str, dict] = {}
         self._positions: dict[str, dict] = {}
         self._token_cache: dict[tuple[str, str], str] = {}
@@ -116,6 +216,7 @@ class KotakBroker(BrokerBase):
                 raise ValueError("limit_buffer 0 aur 5% ke beech hona chahiye")
             from neo_api_client import NeoAPI  # lazy — optional dependency
             self._client = NeoAPI(consumer_key=consumer_key, environment="prod")
+            redact_sdk_logs([consumer_key, mobile, ucc, mpin])
 
     @property
     def mode(self) -> str:
@@ -252,7 +353,8 @@ class KotakBroker(BrokerBase):
         if not ltp:
             raise ValueError("Kotak LTP nahi mila — order nahi bheja")
         limit = _marketable_limit(float(ltp), side, self.limit_buffer)
-        resp = _ensure_ok(self._api().place_order(
+        self._rate.acquire(exchange)  # OPS guard: exceed ho to request hi nahi jati
+        resp = self._api().place_order(
             exchange_segment=seg,
             product=prod,
             price=f"{limit:.2f}",
@@ -261,13 +363,16 @@ class KotakBroker(BrokerBase):
             validity="DAY",
             trading_symbol=trd,
             transaction_type=self.SIDES[side],
-        ), "place_order")
+        )
+        base = {"exchange": exchange, "symbol": symbol, "side": side, "qty": int(qty),
+                "product": product, "order_type": "LIMIT", "price": limit, "filled_qty": 0}
+        if _is_explicit_reject(resp):
+            return {**base, "order_id": "", "status": "REJECTED", "reason_code": resp.get("stCode")}
+        _ensure_ok(resp, "place_order")
         order_id = str(resp.get("nOrdNo") or "")
         if not order_id:
             raise RuntimeError("Kotak place_order: order number nahi mila — broker order book check karo")
-        order = {"order_id": order_id, "exchange": exchange, "symbol": symbol, "side": side,
-                 "qty": int(qty), "product": product, "order_type": "LIMIT",
-                 "price": limit, "status": "OPEN", "filled_qty": 0}
+        order = {**base, "order_id": order_id, "status": "OPEN"}
         self._orders[order_id] = order
         return order
 
@@ -310,8 +415,9 @@ class KotakBroker(BrokerBase):
                 o["status"] = "CANCELLED"
                 return o
             return {"order_id": order_id, "status": "NOT_FOUND"}
-        _ensure_ok(self._api().cancel_order(order_id=order_id), "cancel_order")
         o = self._orders.get(order_id)
+        self._rate.acquire((o or {}).get("exchange", "NSE"))  # cancel bhi OPS mein count hota hai
+        _ensure_ok(self._api().cancel_order(order_id=order_id), "cancel_order")
         # Cancel accepted ≠ cancelled. Final state broker order book se reconcile karo.
         if o:
             o["status"] = "CANCEL_REQUESTED"
@@ -373,8 +479,15 @@ class KotakBroker(BrokerBase):
         """🚨 Kill switch — saari open positions band karo (marketable limit exits)."""
         results = []
         for pos in self.positions():
-            if pos["qty"] != 0:
-                side = "SELL" if pos["qty"] > 0 else "BUY"
-                results.append(self.place_market_order(
-                    pos.get("exchange", "NSE"), pos["symbol"], side, abs(pos["qty"])))
+            if pos["qty"] == 0:
+                continue
+            side = "SELL" if pos["qty"] > 0 else "BUY"
+            exchange = pos.get("exchange", "NSE")
+            try:
+                results.append(self.place_market_order(exchange, pos["symbol"], side, abs(pos["qty"])))
+            except Exception as exc:
+                # Har exit alag se try hota hai. Fail hone wali exit manual review ke liye visible rehti hai.
+                results.append({"exchange": exchange, "symbol": pos["symbol"], "side": side,
+                                "qty": abs(pos["qty"]), "status": "NOT_SENT",
+                                "error": type(exc).__name__})
         return results
