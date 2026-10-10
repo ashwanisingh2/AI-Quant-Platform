@@ -1,7 +1,9 @@
-# Dashboard nginx — SPA + API/WS proxy to the "api" service (docker-compose).
+# Dashboard nginx template — SPA + API/WS proxy.
+# Official nginx image API_UPSTREAM aur PORT env se render karta hai (default docker-compose: api:8000,
+# Railway: private host:port). Upstream resolve na ho to nginx start hi nahi hota.
 # Vite dev jaisa hi behaviour: /api prefix strip hota hai, /ws direct proxy.
 server {
-    listen 80;
+    listen ${PORT};
     server_name _;
     root /usr/share/nginx/html;
     index index.html;
@@ -18,7 +20,7 @@ server {
 
     # REST API → backend (prefix /api strip — vite rewrite jaisa)
     location /api/ {
-        proxy_pass http://api:8000/;
+        proxy_pass http://${API_UPSTREAM}/;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -28,7 +30,7 @@ server {
 
     # WebSocket → backend /ws/events (no prefix strip)
     location /ws {
-        proxy_pass http://api:8000;
+        proxy_pass http://${API_UPSTREAM};
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
