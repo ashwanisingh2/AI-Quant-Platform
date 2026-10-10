@@ -34,4 +34,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 
 # Default: orchestration API. Override for CLIs, e.g.:
 #   docker run ai-quant-api aiq-engine strategies
-CMD ["aiq-api"]
+CMD ["python", "-m", "apps.api.main"]

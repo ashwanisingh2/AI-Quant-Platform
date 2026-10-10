@@ -18,7 +18,7 @@ jobs:
           python-version: "3.12"
 
       - name: Generate ephemeral test credential
-        run: python -c "import os,secrets; open(os.environ['GITHUB_ENV'], 'a').write('API_AUTH_TOKEN=' + secrets.token_urlsafe(48) + '\n')"
+        run: python -c "import os,secrets; token=secrets.token_urlsafe(48); print('::add-mask::'+token); open(os.environ['GITHUB_ENV'], 'a').write('API_AUTH_TOKEN=' + token + '\n')"
 
       - name: Install package
         run: pip install -e ".[kite,dev]"
@@ -82,13 +82,18 @@ jobs:
         run: |
           python scripts/init_deployment.py
           sudo install -d -o 10001 -g 10001 data
-      - name: Build and start containers
-        run: docker compose up --build -d --wait --wait-timeout 180
+      - name: Build images
+        run: docker compose build
+      - name: Start containers
+        run: docker compose up -d --wait --wait-timeout 180
       - name: Verify protected routes and dashboard
         run: |
           curl --fail http://localhost:5173/ >/dev/null
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:5173/api/ready)" = 401
           docker compose exec -T api python -c "import os,urllib.request; request=urllib.request.Request('http://localhost:8000/ready',headers={'Authorization':'Bearer '+os.environ['API_AUTH_TOKEN']}); assert urllib.request.urlopen(request).status == 200"
+      - name: Container diagnostics
+        if: failure()
+        run: docker compose logs --no-color --tail=100
       - name: Clean up smoke-test containers
         if: always()
         run: docker compose down
