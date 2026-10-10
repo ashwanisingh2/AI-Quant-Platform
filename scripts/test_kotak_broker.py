@@ -4,6 +4,7 @@ Run: python -m unittest scripts.test_kotak_broker
 """
 import importlib.util
 import logging
+import re
 import unittest
 
 from apps.engine.brokers import available_brokers, get_broker
@@ -14,6 +15,7 @@ from apps.engine.brokers.kotak_broker import (
     OrderRateGuard,
     OrderRateLimitExceeded,
     _marketable_limit,
+    new_order_tag,
     redact_sdk_logs,
 )
 
@@ -332,6 +334,51 @@ class LiveSafetyTests(unittest.TestCase):
         self.assertEqual(results[1]["status"], "NOT_SENT")
         self.assertEqual(results[1]["error"], "OrderRateLimitExceeded")
         self.assertEqual(len(self.fake.placed()), 1)
+
+
+class OrderTagTests(unittest.TestCase):
+    TAG_RE = re.compile(r"^AIQ[0-9A-F]{12}$")
+
+    def test_generated_tags_are_unique_short_and_alnum(self):
+        tags = {new_order_tag() for _ in range(500)}
+        self.assertEqual(len(tags), 500)
+        for tag in tags:
+            self.assertRegex(tag, self.TAG_RE)
+            self.assertLessEqual(len(tag), 15)
+
+    def test_each_live_order_sends_its_own_tag_and_returns_it(self):
+        fake = FakeNeo(ltp=100.0)
+        broker = live_broker(fake)
+        broker.connect()
+        first = broker.place_market_order("NSE", "RELIANCE", "BUY", 1)
+        second = broker.place_market_order("NSE", "RELIANCE", "BUY", 1)
+        sent = fake.placed()
+        self.assertEqual(sent[0]["tag"], first["order_tag"])
+        self.assertEqual(sent[1]["tag"], second["order_tag"])
+        self.assertNotEqual(first["order_tag"], second["order_tag"])
+        self.assertRegex(first["order_tag"], self.TAG_RE)
+
+    def test_no_algo_field_is_sent_by_us(self):
+        # Kotak Algo ID khud append karta hai; hamara payload mein koi algo field nahi jana chahiye.
+        fake = FakeNeo(ltp=100.0)
+        broker = live_broker(fake)
+        broker.connect()
+        broker.place_market_order("NSE", "RELIANCE", "BUY", 1)
+        self.assertFalse(any("algo" in key.lower() for key in fake.placed()[0]))
+
+    def test_rejected_order_still_carries_its_tag(self):
+        fake = FakeNeo(ltp=100.0)
+        fake.place_response = {"stat": "Not_Ok", "stCode": 1003, "emsg": "insufficient funds"}
+        broker = live_broker(fake)
+        broker.connect()
+        order = broker.place_market_order("NSE", "RELIANCE", "BUY", 1)
+        self.assertEqual(order["status"], "REJECTED")
+        self.assertEqual(order["order_tag"], fake.placed()[0]["tag"])
+
+    def test_order_report_maps_guiordid_back_to_tag(self):
+        broker = live_broker(FakeNeo())
+        local = broker._to_local_order({"nOrdNo": "1", "GuiOrdId": "AIQ0123456789AB", "ordSt": "open"})
+        self.assertEqual(local["order_tag"], "AIQ0123456789AB")
 
 
 @unittest.skipUnless(importlib.util.find_spec("neo_api_client"), "kotakneoapi not installed")

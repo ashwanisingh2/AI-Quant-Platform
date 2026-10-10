@@ -50,6 +50,14 @@ FNO_SEGMENTS = {"nse_fo", "bse_fo", "mcx_fo"}
 SEBI_OPS_LIMIT = 10
 SESSION_EXPIRED_CODE = 403
 
+#: Per-order tag (SDK `tag` -> payload `ig` -> echoed as GuiOrdId): 15 chars, alnum only,
+#: har order ke liye unique. Kotak Algo ID khud append karta hai; ye hamara order-level audit tag hai.
+ORDER_TAG_PREFIX = "AIQ"
+
+
+def new_order_tag() -> str:
+    return ORDER_TAG_PREFIX + uuid.uuid4().hex[:12].upper()
+
 
 class KotakSessionExpired(RuntimeError):
     """Kotak session expire ho gaya — naye TOTP ke saath live session restart karo."""
@@ -340,6 +348,7 @@ class KotakBroker(BrokerBase):
                 "exchange": exchange, "symbol": symbol, "side": side,
                 "qty": qty, "product": product, "order_type": "LIMIT",
                 "price": price, "status": "COMPLETE", "filled_qty": qty,
+                "order_tag": new_order_tag(),
                 "ts": datetime.now(timezone.utc).isoformat(),
             }
             self._orders[order["order_id"]] = order
@@ -354,6 +363,7 @@ class KotakBroker(BrokerBase):
             raise ValueError("Kotak LTP nahi mila — order nahi bheja")
         limit = _marketable_limit(float(ltp), side, self.limit_buffer)
         self._rate.acquire(exchange)  # OPS guard: exceed ho to request hi nahi jati
+        tag = new_order_tag()
         resp = self._api().place_order(
             exchange_segment=seg,
             product=prod,
@@ -363,9 +373,11 @@ class KotakBroker(BrokerBase):
             validity="DAY",
             trading_symbol=trd,
             transaction_type=self.SIDES[side],
+            tag=tag,
         )
         base = {"exchange": exchange, "symbol": symbol, "side": side, "qty": int(qty),
-                "product": product, "order_type": "LIMIT", "price": limit, "filled_qty": 0}
+                "product": product, "order_type": "LIMIT", "price": limit, "filled_qty": 0,
+                "order_tag": tag}
         if _is_explicit_reject(resp):
             return {**base, "order_id": "", "status": "REJECTED", "reason_code": resp.get("stCode")}
         _ensure_ok(resp, "place_order")
@@ -386,6 +398,7 @@ class KotakBroker(BrokerBase):
             "qty": int(_num(rec, "qty")),
             "product": rec.get("prod"),
             "order_type": rec.get("prcTp"),
+            "order_tag": str(rec.get("GuiOrdId") or ""),
             "price": _num(rec, "prc") or _num(rec, "avgPrc"),
             "status": self.STATUS_MAP.get(raw, "UNKNOWN"),
             "filled_qty": int(_num(rec, "fldQty")),
