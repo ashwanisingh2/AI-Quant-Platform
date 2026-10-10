@@ -42,9 +42,11 @@ class BhavcopyProvider(DataProvider):
         self.timeout = timeout
 
     def _candidate_urls(self, d: date) -> list[str]:
+        if d >= date(2024, 7, 8):
+            return [f"https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_{d:%Y%m%d}_F_0000.csv.zip"]
         dd = f"{d.day:02d}"
         mon = d.strftime("%b").upper()
-        yy = f"{d.year % 100:02d}"
+        yy = str(d.year)
         fname = f"cm{dd}{mon}{yy}bhav.csv.zip"
         urls = []
         for base in self.BASE_URLS:
@@ -63,6 +65,15 @@ class BhavcopyProvider(DataProvider):
                 csv_name = next(n for n in zf.namelist() if n.lower().endswith(".csv"))
                 text = io.TextIOWrapper(zf.open(csv_name), encoding="utf-8")
                 for row in csv.DictReader(text):
+                    if "TckrSymb" in row:
+                        if row.get("TradDt") != day.isoformat():
+                            continue
+                        row = {
+                            "SYMBOL": row.get("TckrSymb"), "SERIES": row.get("SctySrs"),
+                            "OPEN": row.get("OpnPric"), "HIGH": row.get("HghPric"),
+                            "LOW": row.get("LwPric"), "CLOSE": row.get("ClsPric"),
+                            "TOTTRDQTY": row.get("TtlTradgVol"),
+                        }
                     if row.get("SYMBOL") == symbol and row.get("SERIES") == "EQ":
                         return [candle_from_bhavcopy_row(row, day, exchange)]
                 return []  # file mili, symbol nahi — aage try mat karo
@@ -72,6 +83,8 @@ class BhavcopyProvider(DataProvider):
 
     def get_historical(self, symbol: str, days: int = 60, exchange: str = "NSE") -> list[Candle]:
         """Last N trading days — recent se peeche jaate hue (weekends skip)."""
+        if exchange != "NSE":
+            raise ValueError("Bhavcopy supports NSE only")
         candles: list[Candle] = []
         d = date.today()
         found = 0
