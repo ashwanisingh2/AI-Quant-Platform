@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 import threading
 import time
 import uuid
@@ -91,14 +92,45 @@ class OrderRateGuard:
             window.append(now)
 
 
+#: Field-name fragments whose values are always fully masked. Mirrors the SDK's own
+#: censor list (kotakneoapi 3.0.x `censor_sensitive_data`), which only partially masks
+#: (`65***21`) — that still leaks 4 of 6 MPIN/TOTP digits on failed-login ERROR logs.
+_SENSITIVE_KEY_PARTS = ("password", "secret", "auth", "api_key", "consumer_key",
+                        "consumer_secret", "otp", "mpin", "sid")
+#: Exact field names (case-insensitive) the SDK leaves uncensored: session token (JWT),
+#: request id, PAN (`kId`), account name and login identity.
+_SENSITIVE_KEYS = {"token", "rid", "kid", "greetingname", "hsserverid",
+                   "mobilenumber", "mobile_number", "ucc"}
+#: `"key": "value"` pairs inside raw text, e.g. a truncated response-body preview.
+_JSON_PAIR = re.compile(r'"([A-Za-z0-9_\-]+)"(\s*:\s*)"[^"]*"?')
+
+
+def _is_sensitive_key(key) -> bool:
+    lower = str(key).lower()
+    return lower in _SENSITIVE_KEYS or any(part in lower for part in _SENSITIVE_KEY_PARTS)
+
+
+def _mask_json_pair(match: re.Match) -> str:
+    if not _is_sensitive_key(match.group(1)):
+        return match.group(0)
+    return f'"{match.group(1)}"{match.group(2)}"***"'
+
+
 def _scrub(value, secrets: list[str]):
-    """Strings, dict, list/tuple mein secrets ko *** se badal do (structlog event dict bhi cover)."""
+    """Secrets aur sensitive fields ko *** se badal do (structlog event dict, nested bhi).
+
+    Teen layer: sensitive key ki value poori mask, known secret values (aur SDK ka
+    partial `ab***yz` form) replace, raw JSON text ke andar sensitive pairs mask.
+    """
     if isinstance(value, str):
         for secret in secrets:
             value = value.replace(secret, "***")
-        return value
+            if len(secret) > 4:
+                value = value.replace(f"{secret[:2]}***{secret[-2:]}", "***")
+        return _JSON_PAIR.sub(_mask_json_pair, value) if '"' in value else value
     if isinstance(value, dict):
-        return {k: _scrub(v, secrets) for k, v in value.items()}
+        return {k: "***" if _is_sensitive_key(k) else _scrub(v, secrets)
+                for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return type(value)(_scrub(v, secrets) for v in value)
     return value

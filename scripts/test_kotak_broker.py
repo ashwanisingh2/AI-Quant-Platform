@@ -14,6 +14,7 @@ from apps.engine.brokers.kotak_broker import (
     KotakSessionExpired,
     OrderRateGuard,
     OrderRateLimitExceeded,
+    SecretRedactor,
     _marketable_limit,
     new_order_tag,
     redact_sdk_logs,
@@ -381,6 +382,59 @@ class OrderTagTests(unittest.TestCase):
         self.assertEqual(local["order_tag"], "AIQ0123456789AB")
 
 
+def _redacted(msg, secrets=("+919999999999", "U1ABC", "654321")):
+    """SecretRedactor ko ek structlog-style record par chalao (SDK install hona zaroori nahi)."""
+    record = logging.LogRecord("neo_api_client.rest", logging.ERROR, __file__, 1, msg, None, None)
+    SecretRedactor(list(secrets)).filter(record)
+    return repr(record.msg)
+
+
+class SecretRedactorTests(unittest.TestCase):
+    """SDK ke partial mask (`65***21`) aur uncensored session fields ke regressions."""
+
+    def test_sdk_partial_mask_of_mpin_and_totp_is_fully_hidden(self):
+        # kotakneoapi 3.0.x failed totp_validate ko ERROR par `{"mpin": "65***21"}` log karta hai.
+        line = _redacted({"event": "api_error_response",
+                          "body": {"mpin": "65***21", "totp": "11***33"}, "status_code": 401})
+        self.assertNotIn("65***21", line)
+        self.assertNotIn("11***33", line)
+        self.assertIn("api_error_response", line)
+
+    def test_partial_form_of_known_secret_is_hidden_inside_text(self):
+        line = _redacted({"event": "note", "detail": "retry with mpin 65***21 failed"})
+        self.assertNotIn("65***21", line)
+
+    def test_session_token_pan_and_name_are_masked(self):
+        line = _redacted({"event": "api_request_success", "response_body": {"data": {
+            "token": "eyJTRADE.JWT.sig", "sid": "sess-1", "rid": "r-9", "kId": "ABCDE1234F",
+            "greetingName": "Ravi", "hsServerId": "srv1", "status": "success"}}})
+        for leaked in ("eyJTRADE.JWT.sig", "sess-1", "r-9", "ABCDE1234F", "Ravi", "srv1"):
+            self.assertNotIn(leaked, line)
+        self.assertIn("success", line)
+
+    def test_truncated_body_preview_text_is_scrubbed(self):
+        preview = '{"data":{"token":"eyJPREVIEW.JWT","sid":"s2","stat":"Ok","kId":"ABCDE12'
+        record = logging.LogRecord("neo_api_client.rest", logging.ERROR, __file__, 1,
+                                   {"response_body": {"truncated": True, "preview": preview}},
+                                   None, None)
+        SecretRedactor([]).filter(record)
+        scrubbed = record.msg["response_body"]["preview"]
+        self.assertEqual(scrubbed, '{"data":{"token":"***","sid":"***","stat":"Ok","kId":"***"')
+
+    def test_non_sensitive_order_fields_stay_readable(self):
+        line = _redacted({"event": "api_request_success", "body": {
+            "ts": "RELIANCE-EQ", "pr": "2500.00", "instrument_token": "2885", "ig": "AIQ0123456789AB"}})
+        for kept in ("RELIANCE-EQ", "2500.00", "2885", "AIQ0123456789AB"):
+            self.assertIn(kept, line)
+
+    def test_nested_lists_and_args_are_scrubbed(self):
+        record = logging.LogRecord("neo_api_client", logging.ERROR, __file__, 1,
+                                   "login for %s", ("+919999999999",), None)
+        SecretRedactor(["+919999999999"]).filter(record)
+        self.assertNotIn("+919999999999", record.getMessage())
+        self.assertNotIn("U1ABC", _redacted({"rows": [{"note": "ucc U1ABC"}, ("U1ABC",)]}))
+
+
 @unittest.skipUnless(importlib.util.find_spec("neo_api_client"), "kotakneoapi not installed")
 class LogRedactionTests(unittest.TestCase):
     def test_structured_sdk_event_is_scrubbed_before_handlers(self):
@@ -408,6 +462,32 @@ class LogRedactionTests(unittest.TestCase):
         self.assertNotIn("U1ABC", line)
         self.assertNotIn("654321", line)
         self.assertIn("***", line)
+
+    def test_real_sdk_failed_login_and_session_token_are_not_leaked(self):
+        """End-to-end through the SDK's own censor processor (partial mask) + our filter."""
+        from neo_api_client.logger import get_logger
+
+        captured = []
+
+        class Capture(logging.Handler):
+            def emit(self, record):
+                captured.append(repr(record.msg))
+
+        sdk = logging.getLogger("neo_api_client")
+        capture = Capture()
+        sdk.addHandler(capture)
+        try:
+            redact_sdk_logs(["+919999999999", "U1ABC", "654321"])
+            log = get_logger("neo_api_client.rest")
+            log.error("api_error_response", body={"mpin": "654321"}, status_code=401)
+            log.error("api_request_success", body={"totp": "112233"},
+                      response_body={"data": {"token": "eyJTRADE.JWT.sig", "kId": "ABCDE1234F"}})
+        finally:
+            sdk.removeHandler(capture)
+        joined = "\n".join(captured)
+        self.assertEqual(len(captured), 2)
+        for leaked in ("654321", "65***21", "112233", "11***33", "eyJTRADE", "ABCDE1234F"):
+            self.assertNotIn(leaked, joined)
 
 
 if __name__ == "__main__":
