@@ -45,4 +45,5 @@ def available_brokers() -> list[dict]:
 from apps.engine.brokers.dhan_broker import DhanBroker  # noqa: E402,F401
 from apps.engine.brokers.fyers_broker import FyersBroker  # noqa: E402,F401
 from apps.engine.brokers.kite_broker import KiteBroker  # noqa: E402,F401
+from apps.engine.brokers.kotak_broker import KotakBroker  # noqa: E402,F401
 from apps.engine.brokers.upstox_broker import UpstoxBroker  # noqa: E402,F401

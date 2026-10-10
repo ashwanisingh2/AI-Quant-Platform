@@ -24,3 +24,7 @@ kiteconnect>=5.0
 # Optional — sirf LIVE trading ke liye; dry-run bina inke chalta hai
 # upstox-python-sdk>=2.0
 # fyers-apiv3>=3.0
+
+# Phase 8 (Kotak Neo — personal live trading)
+# Optional — sirf LIVE Kotak trading ke liye; dry-run bina iske chalta hai
+# kotakneoapi>=3.0

@@ -7,7 +7,7 @@
 | Recovery | Manual broker verification gate | Automated broker reconciliation |
 | Backtests | Data hash, signal trace, benchmark, estimated costs | Walk-forward, point-in-time datasets, market-specific fees |
 | AI research | Linear analyst/trader/risk pipeline | Specialist debate, source citations, calibration |
-| Broker adapters | Kite/Dhan/Upstox/Fyers code and dry-run tests | Broker-by-broker live certification |
+| Broker adapters | Kite/Dhan/Upstox/Fyers/Kotak Neo code and dry-run tests; Kotak Neo offline tests with a fake SDK client | Broker-by-broker live certification; Kotak Neo response-shape verification against the live API |
 | F&O chain | Synthetic sandbox | Licensed real option chain and verified contracts |
 | Authentication | Single private operator token | User accounts, RBAC, broker OAuth renewal |
 | Dashboard | Unified responsive workspace | Long-duration browser and accessibility audits |
