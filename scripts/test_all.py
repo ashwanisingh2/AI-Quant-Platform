@@ -573,9 +573,9 @@ def t_p5_docker_stack():
     nginx = (ROOT / "apps" / "dashboard" / "nginx.conf").read_text()
     assert "proxy_pass http://api:8000/;" in nginx, "api proxy prefix strip missing"
     assert "location /ws" in nginx and "Upgrade $http_upgrade" in nginx
-    # root Dockerfile: healthcheck + aiq-api default
+    # Root Dockerfile: module startup keeps data paths under the mounted /app root.
     df = (ROOT / "Dockerfile").read_text()
-    assert "HEALTHCHECK" in df and 'CMD ["aiq-api"]' in df
+    assert "HEALTHCHECK" in df and 'CMD ["python", "-m", "apps.api.main"]' in df
     # .dockerignore: data aur secrets bahar
     di = (ROOT / ".dockerignore").read_text()
     for x in ["data/", ".env", "node_modules/", "*.egg-info/"]:
