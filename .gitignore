@@ -15,3 +15,6 @@ data/agent_runs/
 
 # Private execution journal and SQLite WAL/SHM sidecars
 data/execution.sqlite3*
+
+# Kotak Neo SDK rotating log file (written relative to the working directory)
+logs/

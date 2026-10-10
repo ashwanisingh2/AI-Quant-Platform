@@ -106,6 +106,44 @@ Kotak rules the adapter follows:
 - Orders are cash equity only (NSE/BSE, CNC or MIS) and are sent as LIMIT orders priced just through LTP (buffer 0.5%, rounded to tick). Market orders are never sent. F&O is rejected.
 - Set `KOTAK_STATIC_IP` to the IP registered with Kotak. A mismatch refuses the session and logs out.
 - Cancel requests are recorded as `CANCEL_REQUESTED`, not confirmed. Check the Kotak order book before treating a cancel as done.
-- The Kotak SDK logs request bodies, including the mobile number and UCC, to stdout. Keep logs private, or raise the `neo_api_client` logger level in your deployment.
+- Each order carries an audit tag (`AIQ` + 12 hex characters, sent as the SDK `tag` and read back from `GuiOrdId`). Kotak adds its own Algo ID; the adapter does not send one.
+
+### Kotak order outcomes
+
+| Event | Adapter result | What the session does | Operator action |
+|---|---|---|---|
+| Kotak accepts the order | `OPEN` with Kotak order number | Journal records `OPEN` | Fill is not confirmed; check the order book |
+| Kotak explicitly rejects it (`stat` not `Ok`) | `REJECTED` with `reason_code` (`stCode`) | Journal records `REJECTED`; trading continues | Read the reject reason in the Kotak app |
+| SDK error, timeout or no order number | Exception | Journal records `unknown`; the loop stops with `trading_loop_failed` and the risk veto | Reconcile from the Kotak order book. No automatic retry |
+| Session expired (`stCode` 403) | `KotakSessionExpired` | Loop stops (`error_type: KotakSessionExpired`) | Reconcile, then start a new live session with a fresh TOTP |
+| More than 10 order or cancel requests per second on one exchange | `OrderRateLimitExceeded`, request not sent | Same as an SDK error: journal `unknown`, loop stops | The order never reached Kotak. Still confirm in the order book before recording reconciliation |
+
+The 10 requests/second guard follows the SEBI retail API threshold. Placements and cancels both count, per exchange, and blocked attempts count too.
+
+### Kotak and the kill switch
+
+The kill switch cancels open orders and sends marketable LIMIT exits. With Kotak it will usually report `incomplete` with `manual_action_required: true`. This is expected:
+
+- Cancels come back as `CANCEL_REQUESTED`, which is reported as `CancellationUnconfirmed`.
+- LIMIT exits come back `OPEN`, which is reported as `FillUnconfirmed`. A `REJECTED` exit is reported as `ExitRejectedOrUnknown`.
+
+Each exit is attempted on its own. One failure does not stop the remaining exits. After any kill, check every position and order in the Kotak app before recording reconciliation.
+
+### Kotak SDK logs
+
+The SDK (`kotakneoapi`) logs to stdout and to a rotating file, `logs/neo-api-client.log`, relative to the working directory. On a failed login it writes request bodies at ERROR level even with default settings. At `NEO_LOG_LEVEL=INFO` or `DEBUG` it writes every request and response, including session tokens. The SDK masks MPIN and TOTP only partially (`65***21`).
+
+When live mode creates the SDK client, the adapter adds a redaction filter to the SDK handlers. The filter fully masks:
+
+- MPIN, TOTP and the consumer key
+- the session token, `sid` and `rid`
+- PAN (`kId`) and account name
+- mobile number and UCC
+
+This includes values inside truncated response previews. Treat the filter as a safety net, not a guarantee:
+
+- Keep `NEO_LOG_LEVEL` at `WARNING` (the default).
+- In containers, set `NEO_LOG_FILE_ENABLED=false`, or keep `logs/` on private storage.
+- `logs/` is ignored by git and excluded from Docker builds. Never attach these logs to issues.
 
 Not verified against the live Kotak API. The adapter tests use a fake SDK client. Before any real order, check login, `limits`, `positions`, `order_report` and a quote with a read-only session. Then place one small order yourself, outside this repo's tests.

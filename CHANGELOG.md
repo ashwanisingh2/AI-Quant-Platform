@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Kotak Neo log redaction now fully masks values the SDK only partially masks or leaves
+  in plain text: MPIN and TOTP (`65***21` leaked 4 of 6 digits on failed-login ERROR logs),
+  session token, `sid`/`rid`, PAN (`kId`), account name, and truncated response previews.
+- SDK log file directory `logs/` is ignored by git and excluded from Docker builds.
+- Operations runbook: Kotak order outcomes, OPS guard, session expiry, kill-switch
+  reporting and SDK logging guidance.
+
 ## 2.0.0a1 — V2 foundation
 
 - Responsive command center, research/execution navigation, explicit capability boundaries.

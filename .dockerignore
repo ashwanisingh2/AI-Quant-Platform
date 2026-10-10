@@ -1,5 +1,6 @@
 # Build context se bahar rakho
 data/
+logs/
 node_modules/
 __pycache__/
 *.pyc
