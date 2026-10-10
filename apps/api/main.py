@@ -41,6 +41,7 @@ from apps.engine.live import (
     DhanQuotePriceSource,
     FyersQuotePriceSource,
     KiteQuotePriceSource,
+    KotakQuotePriceSource,
     LiveTrader,
     ReplayPriceSource,
     UpstoxQuotePriceSource,
@@ -144,6 +145,9 @@ class LiveStartRequest(BaseModel):
     speed: float = Field(default=1.0, ge=0, le=3600, allow_inf_nan=False)           # replay source speed (dry_run without broker creds)
     limit: int = Field(default=150, ge=35, le=100000)
     confirm: str = ""            # live mode ke liye required
+    # Kotak Neo ka daily TOTP (authenticator ka 6-digit code). Sirf live start ke liye,
+    # kahin store nahi hota. Har din / har live start par naya code do.
+    totp: str | None = Field(default=None, min_length=6, max_length=6, pattern=r"^[0-9]{6}$")
 
 
 # ---------- endpoints ----------
@@ -381,8 +385,15 @@ async def paper_stop():
 
 
 # ---------- live trading (gated, multi-broker) ----------
-def _broker_kwargs(broker_name: str) -> dict:
+def _broker_kwargs(broker_name: str, totp: str | None = None) -> dict:
     """Har broker ke live creds (env se) — constructor kwargs."""
+    if broker_name == "kotak":
+        return {"consumer_key": os.environ.get("KOTAK_CONSUMER_KEY"),
+                "mobile": os.environ.get("KOTAK_MOBILE"),
+                "ucc": os.environ.get("KOTAK_UCC"),
+                "mpin": os.environ.get("KOTAK_MPIN"),
+                "static_ip": os.environ.get("KOTAK_STATIC_IP") or None,
+                "totp": totp}
     if broker_name == "kite":
         return {"api_key": os.environ.get("KITE_API_KEY"),
                 "access_token": os.environ.get("KITE_ACCESS_TOKEN")}
@@ -398,8 +409,11 @@ def _broker_kwargs(broker_name: str) -> dict:
     return {}
 
 
-def _price_source(broker_name: str, exchange: str, symbol: str):
+def _price_source(broker_name: str, exchange: str, symbol: str, broker=None):
     """Har broker ka live quote source (real LTP poll)."""
+    if broker_name == "kotak":
+        # Kotak quotes ke liye logged-in session chahiye — broker object hi use karo
+        return KotakQuotePriceSource(exchange, symbol, broker) if broker is not None else None
     if broker_name == "kite":
         return KiteQuotePriceSource(exchange, symbol,
                                     api_key=os.environ.get("KITE_API_KEY"),
@@ -464,12 +478,14 @@ async def live_start(req: LiveStartRequest):
 
     try:
         if req.mode == "live":
-            broker = get_broker(req.broker, dry_run=False, **_broker_kwargs(req.broker))
-            source = _price_source(req.broker, exchange, symbol)
+            broker = get_broker(req.broker, dry_run=False, **_broker_kwargs(req.broker, req.totp))
+            source = _price_source(req.broker, exchange, symbol, broker=broker)
         else:
             broker = get_broker(req.broker, dry_run=True)
-            # dry_run = real prices (agar creds hain) + fake money, warna replay
-            source = (_price_source(req.broker, exchange, symbol) if creds_present
+            # Paper (dry_run): Kotak ko kabhi login/quote nahi karte — replay candles par chalta hai.
+            # Baaki brokers: real prices (agar creds hain) + fake money, warna replay.
+            use_broker_prices = creds_present and req.broker != "kotak"
+            source = (_price_source(req.broker, exchange, symbol) if use_broker_prices
                       else ReplayPriceSource(req.instrument, speed=req.speed, limit=req.limit))
     except Exception:
         raise HTTPException(status_code=400, detail="Broker setup failed; check server credentials and SDK installation") from None

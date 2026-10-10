@@ -23,7 +23,7 @@ validated by the automated mock/dry-run suite.
 | Research desk | Analyst → Trader → rules-based Risk, optional LLM, human approval |
 | Strategy lab | Nautilus backtests, shared decision kernel, data fingerprint, benchmark and estimated costs |
 | Paper portfolio | Replay stored candles with simulated funds |
-| Execution | Kite, Dhan, Upstox and Fyers adapters; dry-run and gated live paths |
+| Execution | Kite, Dhan, Upstox, Fyers and Kotak Neo adapters; dry-run and gated live paths |
 | Market data | Mock, bhavcopy and Kite providers; Parquet / DuckDB storage |
 | Derivatives sandbox | Synthetic option chains, contract helpers and long-side strategy examples |
 

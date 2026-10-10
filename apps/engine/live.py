@@ -75,6 +75,26 @@ class KiteQuotePriceSource:
         return None
 
 
+class KotakQuotePriceSource:
+    """Kotak Neo LTP — logged-in broker object ke through (LiveTrader.start → connect() ke baad)."""
+
+    def __init__(self, exchange: str, symbol: str, broker):
+        self.exchange = exchange
+        self.symbol = symbol
+        self.broker = broker
+        self.last_error: str | None = None
+
+    async def get_price(self) -> tuple[float, str] | None:
+        try:
+            q = await asyncio.to_thread(self.broker.quote, self.exchange, self.symbol)
+            lp = q.get("last_price")
+            if lp:
+                return float(lp), datetime.now(timezone.utc).isoformat()
+        except Exception as e:
+            self.last_error = str(e)
+        return None
+
+
 class DhanQuotePriceSource:
     """Dhan se live LTP poll karta hai (dhanhq ticker_data REST)."""
 

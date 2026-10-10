@@ -817,7 +817,7 @@ print("\n🏭 PHASE 7 — 4 Brokers (Kite + Dhan + Upstox + Fyers)")
 def t_p7_registry_four_brokers():
     from apps.engine.brokers import BrokerBase, available_brokers, get_broker
     names = {b["name"] for b in available_brokers()}
-    assert names == {"kite", "dhan", "upstox", "fyers"}, names
+    assert names == {"kite", "dhan", "upstox", "fyers", "kotak"}, names
     for name in names:
         b = get_broker(name, dry_run=True)
         assert isinstance(b, BrokerBase) and b.dry_run, name
@@ -942,7 +942,7 @@ def t_p7_live_page_dynamic_brokers():
     assert "apiPost('/live/start'" in src, "Live page /live/start call nahi karta"
 
 
-check("brokers: registry has 4 (kite/dhan/upstox/fyers)", t_p7_registry_four_brokers)
+check("brokers: registry has 5 (kite/dhan/upstox/fyers/kotak)", t_p7_registry_four_brokers)
 check("brokers: upstox dry-run (fill/positions/square-off)", t_p7_upstox_dry_run)
 check("brokers: fyers dry-run (fill/positions/square-off)", t_p7_fyers_dry_run)
 check("brokers: live trader with upstox + fyers (cash invariant)", t_p7_live_trader_new_brokers)
@@ -1261,7 +1261,7 @@ if not api_up():
                  "API kill-switch kills live too",
                  "API brokers list (kite + dhan)",
                  "API live dhan dry-run + invalid broker gate",
-                 "API brokers list (4 brokers)",
+                 "API brokers list (5 brokers)",
                  "API live fyers dry-run + broker gate",
                  "API F&O flow (fetch + paper + kill)",
                  "API F&O option chain (strikes + premiums)",
@@ -1459,7 +1459,7 @@ else:
     def t_api_brokers_four():
         r = http_get(API + "/brokers")
         names = {b["name"] for b in r["brokers"]}
-        assert names == {"kite", "dhan", "upstox", "fyers"}, names
+        assert names == {"kite", "dhan", "upstox", "fyers", "kotak"}, names
         info = {b["name"]: b for b in r["brokers"]}
         assert info["upstox"]["required_env"] == ["UPSTOX_ACCESS_TOKEN"]
         assert info["fyers"]["required_env"] == ["FYERS_CLIENT_ID", "FYERS_ACCESS_TOKEN"]
@@ -1494,7 +1494,7 @@ else:
         except urllib.error.HTTPError as e:
             assert e.code == 400, f"expected 400, got {e.code}"
 
-    check("API brokers list (4 brokers)", t_api_brokers_four)
+    check("API brokers list (5 brokers)", t_api_brokers_four)
     check("API live fyers dry-run + broker gate", t_api_live_fyers_dry_run)
 
     def t_api_fno_flow():

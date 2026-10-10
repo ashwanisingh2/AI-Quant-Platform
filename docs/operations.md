@@ -92,3 +92,20 @@ python scripts/backup_journal.py data/execution.sqlite3 /secure-backups/executio
 ```
 
 Choose a new destination each time. The utility uses SQLite's online backup API, applies mode 0600, checks integrity, and refuses overwrites. Store backups outside the web root. To verify recovery, open a copy at an isolated test path and confirm unresolved runs remain blocked. Automated regression tests cover this invariant. Full market-data backups and an off-host recovery drill are still operational responsibilities. Never restore a database over a running trading process or use an older backup to clear unknown order outcomes.
+
+## Personal Kotak Neo setup (paper and live)
+
+Paper and live are separate paths. Paper never logs in to Kotak and never sends orders.
+
+- **Paper:** `POST /paper/start` replays stored candles with simulated funds. `POST /live/start` with `mode: "dry_run"` and `broker: "kotak"` also replays stored candles and never calls Kotak. Fetch candles first with `POST /data/fetch`; at least 35 are needed.
+- **Live:** `mode: "live"` plus `LIVE_TRADING_ENABLED=true`, the exact confirm phrase, a capital cap, and the four `KOTAK_*` variables. Pass the current 6-digit authenticator TOTP as `totp` in the request body. It is used once and never stored.
+
+Kotak rules the adapter follows:
+
+- Login is roughly once per trading day. Restart the live session each morning with a fresh TOTP.
+- Orders are cash equity only (NSE/BSE, CNC or MIS) and are sent as LIMIT orders priced just through LTP (buffer 0.5%, rounded to tick). Market orders are never sent. F&O is rejected.
+- Set `KOTAK_STATIC_IP` to the IP registered with Kotak. A mismatch refuses the session and logs out.
+- Cancel requests are recorded as `CANCEL_REQUESTED`, not confirmed. Check the Kotak order book before treating a cancel as done.
+- The Kotak SDK logs request bodies, including the mobile number and UCC, to stdout. Keep logs private, or raise the `neo_api_client` logger level in your deployment.
+
+Not verified against the live Kotak API. The adapter tests use a fake SDK client. Before any real order, check login, `limits`, `positions`, `order_report` and a quote with a read-only session. Then place one small order yourself, outside this repo's tests.
